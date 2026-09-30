@@ -161,7 +161,7 @@ private enum StillFiles {
         ]
         for (center, name) in sources {
             let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.reapplyCurrentStill() }
+                Task { @MainActor [weak self] in self?.reapplyCurrentStill() }
             }
             observers.append((center, token))
         }
