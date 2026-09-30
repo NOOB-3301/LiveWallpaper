@@ -29,13 +29,13 @@ Run the app through the `.app` bundle. `swift run` does not work, because the ap
 
 ## Lock screen
 
-On macOS 26 (Tahoe) and later the lock screen plays your video. macOS has no public API for that, so the app borrows the slot of an Apple Aerial wallpaper: Apple stores downloaded Aerial videos as `.mov` files in `~/Library/Application Support/com.apple.wallpaper/aerials/videos/`, and the app swaps your video into one of them. The system then plays it on the lock screen as if it were the Aerial. No admin rights or SIP changes are needed, and everything stays inside your user folder.
+On macOS 26 (Tahoe) and later the lock screen plays your video. macOS has no public API for that, so the app borrows the slot of an Apple Aerial wallpaper: Apple stores downloaded Aerial videos as `.mov` files in `~/Library/Application Support/com.apple.wallpaper/aerials/videos/`, and the app swaps your video into all of them. The system then plays it on the lock screen as if it were the Aerial. No admin rights or SIP changes are needed, and everything stays inside your user folder.
 
 One-time setup: open System Settings > Wallpaper, pick any Apple Aerial, wait for it to download and leave it selected. Without a downloaded Aerial the app reports an error instead of applying the lock screen.
 
-The app has no way to tell which downloaded Aerial is the selected one, so it takes the first by file name. If you have downloaded several and the lock screen still shows Apple's video, the wrong one was replaced: Stop the wallpaper so the original is restored, keep only the Aerial you selected in the folder above (move the others out in Finder), and Start again. This is untested.
+The app can't tell which downloaded Aerial the lock screen plays, and each display or Space can use a different one, so it replaces every downloaded Aerial with your video. The extra copies are hard links, so they normally take no additional disk space. Apple's Aerial screen saver shows your video too while the app runs.
 
-- Apple's original file is moved to `~/Library/Application Support/LiveWallpaper/Backups/` before the first swap. Stop and Quit move it back. After a crash it is moved back the next time the app launches without resuming playback, or on Stop.
+- Apple's original files are moved to `~/Library/Application Support/LiveWallpaper/Backups/` before the first swap. Stop and Quit move them back. After a crash they are moved back the next time the app launches without resuming playback, or on Stop.
 - Your video is converted without audio and repeated end to end until it lasts about 3 minutes, because the renderer misbehaves when a video ends. The converted file normally keeps the source encoding and can be large, since the repeats add up.
 - Rotation updates the lock screen at most every 30 seconds, always ending on the latest video. The desktop switches at your chosen interval.
 - The app restarts the wallpaper renderer each time you unlock the screen, which keeps later lock screens from going black. It never does this while the screen is locked.

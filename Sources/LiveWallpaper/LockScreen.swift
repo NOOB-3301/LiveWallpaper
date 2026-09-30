@@ -44,13 +44,25 @@ private struct Original: Codable {
     let allowClipping: Bool
 }
 
-// Which downloaded Apple aerial our video stands in for, and where the original waits.
+// The downloaded Apple aerials our video stands in for; each original waits in the backup folder.
 private struct AerialBackup: Codable {
-    let slot: String
-    let backup: String
+    var slots: [String]
 
-    var slotURL: URL { AerialFiles.videos.appendingPathComponent(slot) }
-    var backupURL: URL { URL(fileURLWithPath: backup) }
+    init(slots: [String]) { self.slots = slots }
+
+    private enum CodingKeys: String, CodingKey { case slots, slot }
+
+    // Earlier builds recorded a single slot.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        slots = try container.decodeIfPresent([String].self, forKey: .slots)
+            ?? [container.decode(String.self, forKey: .slot)]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(slots, forKey: .slots)
+    }
 }
 
 private enum StillFiles {
@@ -96,12 +108,15 @@ private enum AerialFiles {
     static let videos = applicationSupport.appendingPathComponent("com.apple.wallpaper/aerials/videos", isDirectory: true)
     static let backups = applicationSupport.appendingPathComponent("LiveWallpaper/Backups", isDirectory: true)
 
-    // The first downloaded aerial is the one our video replaces.
-    static func chooseSlot() throws -> AerialBackup {
+    static func slot(_ name: String) -> URL { videos.appendingPathComponent(name) }
+    static func backup(_ name: String) -> URL { backups.appendingPathComponent(name) }
+
+    // Every downloaded aerial: there is no telling which one the lock screen, a display or a Space plays.
+    static func downloadedSlots() throws -> [String] {
         let files = (try? FileManager.default.contentsOfDirectory(at: videos, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
-        let movies = files.filter { $0.pathExtension.lowercased() == "mov" }
-        guard let slot = movies.map(\.lastPathComponent).min() else { throw LockScreenError.noAerial }
-        return AerialBackup(slot: slot, backup: backups.appendingPathComponent(slot).path)
+        let slots = files.filter { $0.pathExtension.lowercased() == "mov" }.map(\.lastPathComponent).sorted()
+        guard !slots.isEmpty else { throw LockScreenError.noAerial }
+        return slots
     }
 
     // Moves `file` to `destination`, atomically replacing what is there.
@@ -318,15 +333,22 @@ private final class LockObserver: NSObject {
         // The file is moved into place on success, so this only cleans up after a failure.
         defer { try? FileManager.default.removeItem(at: file) }
         do {
-            let record = try aerialBackup ?? AerialFiles.chooseSlot()
-            // Persisted before anything moves, so a crash can never strand Apple's original.
-            aerialBackup = record
             let fileManager = FileManager.default
-            if fileManager.fileExists(atPath: record.slotURL.path), !fileManager.fileExists(atPath: record.backupURL.path) {
-                try fileManager.createDirectory(at: AerialFiles.backups, withIntermediateDirectories: true)
-                try fileManager.moveItem(at: record.slotURL, to: record.backupURL)
+            let slots = try AerialFiles.downloadedSlots()
+            // Persisted before anything moves, so a crash can never strand Apple's originals.
+            aerialBackup = AerialBackup(slots: Array(Set(slots).union(aerialBackup?.slots ?? [])).sorted())
+            try fileManager.createDirectory(at: AerialFiles.backups, withIntermediateDirectories: true)
+            for slot in slots where !fileManager.fileExists(atPath: AerialFiles.backup(slot).path) {
+                try fileManager.moveItem(at: AerialFiles.slot(slot), to: AerialFiles.backup(slot))
             }
-            try AerialFiles.place(file, at: record.slotURL)
+            let first = AerialFiles.slot(slots[0])
+            try AerialFiles.place(file, at: first)
+            // The other slots are hard links to the first, so they take no extra disk space.
+            for slot in slots.dropFirst() {
+                let copy = AerialFiles.newTemporaryFile()
+                do { try fileManager.linkItem(at: first, to: copy) } catch { try fileManager.copyItem(at: first, to: copy) }
+                try AerialFiles.place(copy, at: AerialFiles.slot(slot))
+            }
         } catch let error as LockScreenError {
             throw error
         } catch {
@@ -338,10 +360,12 @@ private final class LockObserver: NSObject {
 
     private func restoreAerial() {
         guard let record = aerialBackup else { return }
-        if FileManager.default.fileExists(atPath: record.backupURL.path) {
-            // The record stays on failure so the next restore retries.
-            guard (try? AerialFiles.place(record.backupURL, at: record.slotURL)) != nil else { return }
+        let failed = record.slots.filter { slot in
+            FileManager.default.fileExists(atPath: AerialFiles.backup(slot).path)
+                && (try? AerialFiles.place(AerialFiles.backup(slot), at: AerialFiles.slot(slot))) == nil
         }
+        // The record keeps whatever failed so the next restore retries.
+        guard failed.isEmpty else { aerialBackup = AerialBackup(slots: failed); return }
         aerialBackup = nil
         Self.killall("WallpaperAerialsExtension", "WallpaperAgent")
     }
