@@ -4,7 +4,8 @@ import AppKit
 import UniformTypeIdentifiers
 import Core
 
-// The Library tab: phase-1 list, preview, rotate/targets card and Start/Stop, now driven by SettingsModel.
+// The Library tab: phase-1 list, preview, rotate/targets card and Start/Stop, now driven by SettingsModel and
+// the agent's status. Workshop items get a source badge and their own preview image.
 @MainActor
 struct LibraryView: View {
     @ObservedObject var model: SettingsModel
@@ -13,6 +14,7 @@ struct LibraryView: View {
     @State private var intervalText: String
     @State private var skippedCount = 0
     @State private var showSkipped = false
+    @State private var pendingRemoval: Set<VideoItem.ID> = []   // Workshop items awaiting the delete confirmation
     @FocusState private var intervalFocused: Bool
 
     init(model: SettingsModel, openWorkshop: @escaping () -> Void = {}) {
@@ -72,6 +74,12 @@ struct LibraryView: View {
         }
         .frame(width: 264)
         .background(.regularMaterial)
+        .alert(removalTitle, isPresented: confirmingRemoval) {
+            Button("Remove", role: .destructive) { finishRemoval() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You can download it again from the Workshop.")
+        }
     }
 
     private var footer: some View {
@@ -150,8 +158,7 @@ struct LibraryView: View {
 
     private var actionBar: some View {
         HStack(spacing: 16) {
-            Text(status.text).font(.subheadline).foregroundStyle(status.warning ? Color.orange : Color.secondary)
-                .lineLimit(1).truncationMode(.middle)
+            statusLine
             Spacer()
             Button {
                 model.clearStatus()
@@ -165,6 +172,16 @@ struct LibraryView: View {
             .frame(width: 168)
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!model.isRunning && !model.canStart)
+        }
+    }
+
+    private var statusLine: some View {
+        HStack(spacing: 8) {
+            Text(status.text).font(.subheadline).foregroundStyle(status.warning ? Color.orange : Color.secondary)
+                .lineLimit(1).truncationMode(.middle)
+            if model.presence == .unresponsive {
+                Button("Restart Agent") { model.restartAgent() }.buttonStyle(.link).font(.subheadline)
+            }
         }
     }
 
@@ -183,10 +200,14 @@ struct LibraryView: View {
     }
 
     private var status: (text: String, warning: Bool) {
-        if let message = model.statusMessage { return (message, true) }
+        if let message = model.localMessage { return (message, true) }
+        if model.presence == .launching { return ("Starting the wallpaper agent…", false) }
+        if model.presence == .unresponsive { return ("The wallpaper agent isn’t responding.", true) }
+        if let message = model.agentStatus?.message { return (message, true) }
         if model.isRunning {
             let name = model.videos.first { $0.id == model.currentID }?.name ?? ""
-            return (model.isPaused ? "Paused · \(name)" : "Playing \(name)", false)
+            let preparing = model.lockBusy ? " · preparing the lock screen…" : ""
+            return ((model.isPaused ? "Paused · \(name)" : "Playing \(name)") + preparing, false)
         }
         if !model.canStart { return ("Turn on Desktop or Lock Screen to start.", true) }
         if model.videos.allSatisfy({ isBroken($0) }) { return ("None of your videos can be played.", true) }
@@ -223,10 +244,35 @@ struct LibraryView: View {
 
     private func removeSelected() { if let id = model.selectedID { remove([id]) } }
 
+    // Local videos are removed at once (the file is never touched); Workshop items ask first because their
+    // downloaded files are deleted.
     private func remove(_ ids: Set<VideoItem.ID>) {
+        if model.videos.contains(where: { ids.contains($0.id) && $0.isWorkshop }) {
+            pendingRemoval = ids
+        } else {
+            performRemoval(ids)
+        }
+    }
+
+    private func finishRemoval() {
+        performRemoval(pendingRemoval)
+        pendingRemoval = []
+    }
+
+    private func performRemoval(_ ids: Set<VideoItem.ID>) {
         let index = model.videos.firstIndex { ids.contains($0.id) } ?? 0
         model.remove(ids: ids)
         if model.selectedItem == nil, !model.videos.isEmpty { model.selectedID = model.videos[min(index, model.videos.count - 1)].id }
+    }
+
+    private var confirmingRemoval: Binding<Bool> {
+        Binding(get: { !pendingRemoval.isEmpty }, set: { if !$0 { pendingRemoval = [] } })
+    }
+
+    private var removalTitle: String {
+        let names = model.videos.filter { pendingRemoval.contains($0.id) }.map(\.name)
+        return names.count == 1 ? "Remove “\(names[0])” and delete its downloaded files?"
+                                : "Remove \(names.count) videos and delete the downloaded files of Workshop items?"
     }
 }
 
@@ -248,7 +294,7 @@ fileprivate struct VideoRow: View {
                 if broken {
                     Text("Missing or unreadable").font(.caption).foregroundStyle(.orange)
                 } else {
-                    Text(meta).font(.caption).foregroundStyle(.secondary)
+                    metaLine
                 }
             }
             Spacer(minLength: 0)
@@ -256,10 +302,18 @@ fileprivate struct VideoRow: View {
         }
         .frame(height: 52)
         .help(broken ? "This file was moved, deleted, or can’t be played. Remove it or add it again." : "")
-        .task(id: item.path) {
+        .task(id: [item.path, item.previewPath ?? ""]) {
             let bytes = (try? item.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             meta = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            image = await Self.loadThumbnail(for: item.url)
+            image = await Self.loadThumbnail(for: item)
+        }
+    }
+
+    // Workshop items carry a download badge and "Workshop · size".
+    private var metaLine: some View {
+        HStack(spacing: 4) {
+            if item.isWorkshop { Image(systemName: "arrow.down.circle.fill").font(.system(size: 12)).foregroundStyle(.secondary) }
+            Text(item.isWorkshop ? "Workshop · \(meta)" : meta).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -278,11 +332,18 @@ fileprivate struct VideoRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private static func loadThumbnail(for url: URL) async -> NSImage? {
-        let key = url.path as NSString
+    // A Workshop item's downloaded preview image when it has one, else a frame of the video.
+    private static func loadThumbnail(for item: VideoItem) async -> NSImage? {
+        let key = (item.previewPath ?? item.path) as NSString
         if let cached = thumbnailCache.object(forKey: key) { return cached }
-        guard let cgImage = await VideoStills.cgImage(for: url, maxPixelSize: CGSize(width: 320, height: 180)) else { return nil }
-        let image = NSImage(cgImage: cgImage, size: .zero)
+        let image: NSImage
+        if let preview = item.previewPath, let downloaded = NSImage(contentsOfFile: preview) {
+            image = downloaded
+        } else if let cgImage = await VideoStills.cgImage(for: item.url, maxPixelSize: CGSize(width: 320, height: 180)) {
+            image = NSImage(cgImage: cgImage, size: .zero)
+        } else {
+            return nil
+        }
         thumbnailCache.setObject(image, forKey: key)
         return image
     }
