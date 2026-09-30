@@ -34,6 +34,8 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
 
 @MainActor final class WallpaperWindowManager {
     private static let pauseWhenOccluded = true
+    // A fully covered desktop needs no decoder: the player (the biggest allocation) is released after this long.
+    private static let releaseDelay: UInt64 = 10_000_000_000
 
     var onPlaybackFailure: (@MainActor (URL) -> Void)?
     private(set) var currentURL: URL?
@@ -45,10 +47,13 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
     private var statusObservations: [NSKeyValueObservation] = []
     private var observers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
     private var wakeTask: Task<Void, Never>?
+    private var releaseTask: Task<Void, Never>?
+    private var resumeTime: CMTime?  // where the released player was, for its replacement
     private var failureReported = false
     private var userPaused = false
     private var occluded = false
     private var sleeping = false
+    private var playerReleased = false  // the windows stay (black) while the player is gone
 
     init() {}
 
@@ -56,14 +61,18 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
         if currentURL == url { return }
         currentURL = url
         failureReported = false
+        resumeTime = nil  // a new video starts from its beginning
         if observers.isEmpty { installObservers() }
         if windows.isEmpty { rebuildWindows() }
-        startPlayer(for: url)
+        // While the desktop is covered the new video only starts once it is uncovered (restorePlayerIfReleased).
+        if !playerReleased { startPlayer(for: url) }
     }
 
     func hide() {
         wakeTask?.cancel()
         wakeTask = nil
+        releaseTask?.cancel()
+        releaseTask = nil
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
         tearDownPlayer()
@@ -75,6 +84,8 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
         userPaused = false
         occluded = false
         sleeping = false
+        playerReleased = false
+        resumeTime = nil
     }
 
     func setPaused(_ paused: Bool) {
@@ -106,6 +117,7 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
         occluded = false  // new windows report their real state through the occlusion notification
         attachPlayer()
         applyPlayback()
+        restorePlayerIfReleased()
     }
 
     private func attachPlayer() {
@@ -130,8 +142,16 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
         player = queue
         looper = newLooper
         statusObservations = observations
+        playerReleased = false
+        releaseTask?.cancel()  // it belonged to the player that was just replaced
+        releaseTask = nil
+        if let time = resumeTime {
+            queue.seek(to: time)
+            resumeTime = nil
+        }
         attachPlayer()
         applyPlayback()
+        if occluded { scheduleRelease() }
     }
 
     private func tearDownPlayer() {
@@ -142,6 +162,30 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
         player?.removeAllItems()
         looper = nil
         player = nil
+    }
+
+    /// Frees the decoder while the desktop is covered; updateOcclusion() builds a new player when it is uncovered.
+    private func releasePlayer() {
+        releaseTask = nil
+        resumeTime = player?.currentTime()
+        tearDownPlayer()
+        attachPlayer()
+        playerReleased = true
+    }
+
+    private func scheduleRelease() {
+        guard releaseTask == nil, player != nil else { return }
+        releaseTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: Self.releaseDelay) } catch { return }
+            self?.releasePlayer()
+        }
+    }
+
+    /// Ends a pending release and brings back a released player, unless the machine is asleep (wake rebuilds it).
+    private func restorePlayerIfReleased() {
+        releaseTask?.cancel()
+        releaseTask = nil
+        if playerReleased, !sleeping, let url = currentURL { startPlayer(for: url) }
     }
 
     private func reportFailure(for url: URL) {
@@ -186,6 +230,7 @@ private func observeFailures(of looper: AVPlayerLooper, item: AVPlayerItem,
 
     private func updateOcclusion() {
         occluded = !windows.isEmpty && windows.allSatisfy { !$0.occlusionState.contains(.visible) }
+        if occluded { scheduleRelease() } else { restorePlayerIfReleased() }
         applyPlayback()
     }
 
