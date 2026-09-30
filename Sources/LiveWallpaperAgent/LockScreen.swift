@@ -2,19 +2,7 @@ import AppKit
 import AVFoundation
 import ImageIO
 import UniformTypeIdentifiers
-
-enum VideoStills {
-    static func cgImage(for url: URL, maxPixelSize: CGSize?) async -> CGImage? {
-        let asset = AVURLAsset(url: url)
-        guard let duration = try? await asset.load(.duration) else { return nil }
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        if let maxPixelSize { generator.maximumSize = maxPixelSize }
-        let seconds = duration.seconds
-        let time = CMTime(seconds: seconds.isFinite ? min(1, seconds / 2) : 0, preferredTimescale: 600)
-        return try? await generator.image(at: time).image
-    }
-}
+import Core
 
 enum LockScreenError: LocalizedError {
     case noFrame, writeFailed(String), setFailed(String)
@@ -35,33 +23,6 @@ enum LockScreenError: LocalizedError {
         case .installFailed(let message):
             return "Couldn't install the video on the lock screen: \(message)"
         }
-    }
-}
-
-private struct Original: Codable {
-    let url: String
-    let scaling: UInt
-    let allowClipping: Bool
-}
-
-// The downloaded Apple aerials our video stands in for; each original waits in the backup folder.
-private struct AerialBackup: Codable {
-    var slots: [String]
-
-    init(slots: [String]) { self.slots = slots }
-
-    private enum CodingKeys: String, CodingKey { case slots, slot }
-
-    // Earlier builds recorded a single slot.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        slots = try container.decodeIfPresent([String].self, forKey: .slots)
-            ?? [container.decode(String.self, forKey: .slot)]
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(slots, forKey: .slots)
     }
 }
 
@@ -223,8 +184,6 @@ private final class LockObserver: NSObject {
 }
 
 @MainActor final class LockScreenWallpaper {
-    private static let originalsKey = "LiveWallpaper.originals.v1"
-    private static let aerialBackupKey = "LiveWallpaper.aerialBackup.v1"
     // Apps built with an older SDK see macOS 26 as 16, so 16 or later means the aerial technique applies.
     private static let usesAerial = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 16
     // Each install writes hundreds of MB, so fast rotation is throttled to one lock screen update per window.
@@ -240,7 +199,7 @@ private final class LockObserver: NSObject {
     private var isLocked = false
     private var lockObserver: LockObserver?
 
-    var hasAppliedStill: Bool { currentStill != nil || aerialBackup != nil }
+    var hasAppliedStill: Bool { currentStill != nil || !aerialSlots.isEmpty }
 
     init() {}
 
@@ -336,7 +295,7 @@ private final class LockObserver: NSObject {
             let fileManager = FileManager.default
             let slots = try AerialFiles.downloadedSlots()
             // Persisted before anything moves, so a crash can never strand Apple's originals.
-            aerialBackup = AerialBackup(slots: Array(Set(slots).union(aerialBackup?.slots ?? [])).sorted())
+            aerialSlots = Array(Set(slots).union(aerialSlots)).sorted()
             try fileManager.createDirectory(at: AerialFiles.backups, withIntermediateDirectories: true)
             for slot in slots where !fileManager.fileExists(atPath: AerialFiles.backup(slot).path) {
                 try fileManager.moveItem(at: AerialFiles.slot(slot), to: AerialFiles.backup(slot))
@@ -359,55 +318,41 @@ private final class LockObserver: NSObject {
     }
 
     private func restoreAerial() {
-        guard let record = aerialBackup else { return }
-        let failed = record.slots.filter { slot in
+        // Originals waiting in Backups/ count even when no record survived, so nothing can be stranded.
+        let pending = Set(aerialSlots).union(AgentRecordStore.backupSlotsOnDisk()).sorted()
+        guard !pending.isEmpty else { return }
+        let failed = pending.filter { slot in
             FileManager.default.fileExists(atPath: AerialFiles.backup(slot).path)
                 && (try? AerialFiles.place(AerialFiles.backup(slot), at: AerialFiles.slot(slot))) == nil
         }
         // The record keeps whatever failed so the next restore retries.
-        guard failed.isEmpty else { aerialBackup = AerialBackup(slots: failed); return }
-        aerialBackup = nil
+        guard failed.isEmpty else { aerialSlots = failed; return }
+        aerialSlots = []
         Self.killall("WallpaperAerialsExtension", "WallpaperAgent")
     }
 
-    private var aerialBackup: AerialBackup? {
-        get {
-            UserDefaults.standard.data(forKey: Self.aerialBackupKey)
-                .flatMap { try? JSONDecoder().decode(AerialBackup.self, from: $0) }
-        }
-        set {
-            if let newValue {
-                UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.aerialBackupKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: Self.aerialBackupKey)
-            }
-        }
+    // Both records live in agent.json (Core), not in UserDefaults: the agent has its own bundle id,
+    // and the records must outlive any one build.
+    private var aerialSlots: [String] {
+        get { AgentRecordStore.load().aerialSlots }
+        set { AgentRecordStore.update { $0.aerialSlots = newValue } }
     }
 
-    private var originals: [String: Original] {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: Self.originalsKey) else { return [:] }
-            return (try? JSONDecoder().decode([String: Original].self, from: data)) ?? [:]
-        }
-        set {
-            if newValue.isEmpty {
-                UserDefaults.standard.removeObject(forKey: Self.originalsKey)
-            } else {
-                UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.originalsKey)
-            }
-        }
+    private var originals: [String: OriginalWallpaper] {
+        get { AgentRecordStore.load().originals }
+        set { AgentRecordStore.update { $0.originals = newValue } }
     }
 
     // Skipped while a previous run's still is showing, so a crash can't make a still the "original".
     private func snapshotOriginals() {
         guard originals.isEmpty else { return }
-        var saved: [String: Original] = [:]
+        var saved: [String: OriginalWallpaper] = [:]
         for screen in NSScreen.screens {
             guard let id = Self.displayID(screen),
                   let url = NSWorkspace.shared.desktopImageURL(for: screen),
                   !StillFiles.contains(url) else { continue }
             let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
-            saved[String(id)] = Original(
+            saved[String(id)] = OriginalWallpaper(
                 url: url.absoluteString,
                 scaling: (options[.imageScaling] as? NSNumber)?.uintValue ?? NSImageScaling.scaleProportionallyUpOrDown.rawValue,
                 allowClipping: (options[.allowClipping] as? NSNumber)?.boolValue ?? true)
@@ -438,7 +383,7 @@ private final class LockObserver: NSObject {
     // That restart also picks up a file swapped while the screen was locked.
     private func screenLockChanged(_ locked: Bool) {
         isLocked = locked
-        if !locked, aerialBackup != nil { Self.killall("WallpaperAerialsExtension") }
+        if !locked, !aerialSlots.isEmpty { Self.killall("WallpaperAerialsExtension") }
     }
 
     private static func killall(_ names: String...) {

@@ -2,18 +2,22 @@ import SwiftUI
 import AVKit
 import AppKit
 import UniformTypeIdentifiers
+import Core
 
+// The Library tab: phase-1 list, preview, rotate/targets card and Start/Stop, now driven by SettingsModel.
 @MainActor
-struct ContentView: View {
-    @ObservedObject var model: AppModel
+struct LibraryView: View {
+    @ObservedObject var model: SettingsModel
+    let openWorkshop: () -> Void
     @State private var isTargeted = false
     @State private var intervalText: String
     @State private var skippedCount = 0
     @State private var showSkipped = false
     @FocusState private var intervalFocused: Bool
 
-    init(model: AppModel) {
+    init(model: SettingsModel, openWorkshop: @escaping () -> Void = {}) {
         self._model = ObservedObject(wrappedValue: model)
+        self.openWorkshop = openWorkshop
         self._intervalText = State(initialValue: String(model.intervalValue))
     }
 
@@ -37,6 +41,7 @@ struct ContentView: View {
             Text(isTargeted ? "Release to add" : "Drop videos here").font(.title2.weight(.semibold))
             Text("or choose files from your Mac. MP4, MOV and M4V work best.").font(.callout).foregroundStyle(.secondary)
             Button("Choose Videos…", action: chooseVideos).buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut("o")
+            Button("Browse the Steam Workshop", action: openWorkshop).buttonStyle(.link)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RoundedRectangle(cornerRadius: 16).fill(.quaternary))

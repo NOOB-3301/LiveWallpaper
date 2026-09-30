@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.noob3301.LiveWallpaper</string>
+	<string>com.noob3301.LiveWallpaper.agent</string>
 	<key>CFBundleName</key>
-	<string>Live Wallpaper</string>
+	<string>Live Wallpaper Agent</string>
 	<key>CFBundleDisplayName</key>
-	<string>Live Wallpaper</string>
+	<string>Live Wallpaper Agent</string>
 	<key>CFBundleExecutable</key>
-	<string>LiveWallpaper</string>
+	<string>LiveWallpaperAgent</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -25,9 +25,11 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>LSUIElement</key>
-	<false/>
+	<true/>
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 	<key>LWRole</key>
-	<string>settings</string>
+	<string>agent</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>

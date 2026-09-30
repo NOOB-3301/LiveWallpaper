@@ -29,6 +29,16 @@ jobs:
       - name: Package app bundle
         run: ./build.sh
 
+      - name: Verify bundle layout
+        run: |
+          AGENT=build/LiveWallpaper.app/Contents/Library/LoginItems/LiveWallpaperAgent.app
+          test -x build/LiveWallpaper.app/Contents/MacOS/LiveWallpaper
+          test -x "$AGENT/Contents/MacOS/LiveWallpaperAgent"
+          codesign -dv "$AGENT"
+          echo "--- libraries linked by the agent ---"
+          otool -L "$AGENT/Contents/MacOS/LiveWallpaperAgent"
+          ls -l "$AGENT/Contents/MacOS/LiveWallpaperAgent" build/LiveWallpaper.app/Contents/MacOS/LiveWallpaper
+
       - name: Zip app bundle
         run: ditto -c -k --keepParent build/LiveWallpaper.app LiveWallpaper-${{ matrix.os }}.zip
 
