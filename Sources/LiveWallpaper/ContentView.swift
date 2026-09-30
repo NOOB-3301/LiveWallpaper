@@ -112,11 +112,13 @@ struct ContentView: View {
                 Text("Apply to")
                 Toggle("Desktop", isOn: $model.applyToDesktop)
                 Toggle("Lock Screen", isOn: $model.applyToLockScreen)
-                    .help("macOS doesn’t let apps play video on the Lock Screen, so a still frame of the current video is used instead.")
+                    .help("On macOS 26 and later the Lock Screen plays your video by taking the place of a downloaded Apple Aerial wallpaper. Older versions show a still frame of the current video.")
             }
             .toggleStyle(.checkbox)
-            Label("Lock Screen gets a still frame — macOS can’t play video there.", systemImage: "info.circle")
+            Label("Lock Screen plays your video through an Apple Aerial wallpaper (macOS 26+; older versions get a still frame). Download and select any Aerial in Wallpaper settings once.", systemImage: "info.circle")
                 .font(.caption).foregroundStyle(.secondary)
+            Link("Open Wallpaper Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
+                .font(.caption)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

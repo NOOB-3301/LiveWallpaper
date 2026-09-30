@@ -18,6 +18,7 @@ enum VideoStills {
 
 enum LockScreenError: LocalizedError {
     case noFrame, writeFailed(String), setFailed(String)
+    case noAerial, convertFailed(String), installFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,12 @@ enum LockScreenError: LocalizedError {
             return "Couldn't save the lock screen image: \(message)"
         case .setFailed(let message):
             return "Couldn't set the lock screen image: \(message)"
+        case .noAerial:
+            return "No Apple Aerial wallpaper is downloaded yet. Open System Settings → Wallpaper, pick an Aerial, wait for it to download and leave it selected, then try again."
+        case .convertFailed(let message):
+            return "Couldn't prepare the video for the lock screen: \(message)"
+        case .installFailed(let message):
+            return "Couldn't install the video on the lock screen: \(message)"
         }
     }
 }
@@ -35,6 +42,15 @@ private struct Original: Codable {
     let url: String
     let scaling: UInt
     let allowClipping: Bool
+}
+
+// Which downloaded Apple aerial our video stands in for, and where the original waits.
+private struct AerialBackup: Codable {
+    let slot: String
+    let backup: String
+
+    var slotURL: URL { AerialFiles.videos.appendingPathComponent(slot) }
+    var backupURL: URL { URL(fileURLWithPath: backup) }
 }
 
 private enum StillFiles {
@@ -72,18 +88,140 @@ private enum StillFiles {
     }
 }
 
+private enum AerialFiles {
+    static let temporaryPrefix = "livewallpaper-lockscreen-"
+
+    private static let applicationSupport = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    static let videos = applicationSupport.appendingPathComponent("com.apple.wallpaper/aerials/videos", isDirectory: true)
+    static let backups = applicationSupport.appendingPathComponent("LiveWallpaper/Backups", isDirectory: true)
+
+    // The first downloaded aerial is the one our video replaces.
+    static func chooseSlot() throws -> AerialBackup {
+        let files = (try? FileManager.default.contentsOfDirectory(at: videos, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []
+        let movies = files.filter { $0.pathExtension.lowercased() == "mov" }
+        guard let slot = movies.map(\.lastPathComponent).min() else { throw LockScreenError.noAerial }
+        return AerialBackup(slot: slot, backup: backups.appendingPathComponent(slot).path)
+    }
+
+    // Moves `file` to `destination`, atomically replacing what is there.
+    static func place(_ file: URL, at destination: URL) throws {
+        if FileManager.default.fileExists(atPath: destination.path) {
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: file)
+        } else {
+            try FileManager.default.moveItem(at: file, to: destination)
+        }
+    }
+
+    static func newTemporaryFile() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(temporaryPrefix)\(UUID().uuidString).mov")
+    }
+
+    static func removeTemporaryFiles() {
+        let directory = FileManager.default.temporaryDirectory
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix(temporaryPrefix) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+}
+
+private enum AerialExport {
+    static let targetSeconds = 180.0
+    static let maxCopies = 600
+
+    // Returns a temporary .mov that looks like an aerial: video only, tiled to about three minutes
+    // because the renderer misbehaves once a video ends.
+    static func makeFile(from source: URL) async throws -> URL {
+        do {
+            let composition = try await tiledComposition(from: source)
+            do {
+                return try await export(composition, preset: AVAssetExportPresetPassthrough)
+            } catch {
+                return try await export(composition, preset: AVAssetExportPresetHEVCHighestQuality)
+            }
+        } catch let error as LockScreenError {
+            throw error
+        } catch {
+            throw LockScreenError.convertFailed(error.localizedDescription)
+        }
+    }
+
+    private static func tiledComposition(from source: URL) async throws -> AVMutableComposition {
+        let asset = AVURLAsset(url: source)
+        let composition = AVMutableComposition()
+        guard let sourceTrack = try await asset.loadTracks(withMediaType: .video).first,
+              let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw LockScreenError.convertFailed("the file has no video track.")
+        }
+        let range = try await sourceTrack.load(.timeRange)
+        guard range.duration.seconds > 0.1 else { throw LockScreenError.convertFailed("the video is too short.") }
+        let copies = min(maxCopies, Int((targetSeconds / range.duration.seconds).rounded(.up)))
+        var cursor = CMTime.zero
+        for _ in 0..<copies {
+            try track.insertTimeRange(range, of: sourceTrack, at: cursor)
+            cursor = cursor + range.duration
+        }
+        track.preferredTransform = try await sourceTrack.load(.preferredTransform)
+        return composition
+    }
+
+    private static func export(_ composition: AVAsset, preset: String) async throws -> URL {
+        guard let session = AVAssetExportSession(asset: composition, presetName: preset) else {
+            throw LockScreenError.convertFailed("the export preset isn't available.")
+        }
+        let file = AerialFiles.newTemporaryFile()
+        session.outputURL = file
+        session.outputFileType = .mov
+        // Puts the moov atom first, like Apple's own aerial files.
+        session.shouldOptimizeForNetworkUse = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously { continuation.resume() }
+        }
+        guard session.status == .completed else {
+            try? FileManager.default.removeItem(at: file)
+            throw session.error ?? LockScreenError.convertFailed("the export didn't finish.")
+        }
+        return file
+    }
+}
+
 @MainActor final class LockScreenWallpaper {
     private static let originalsKey = "LiveWallpaper.originals.v1"
+    private static let aerialBackupKey = "LiveWallpaper.aerialBackup.v1"
+    // Apps built with an older SDK see macOS 26 as 16, so 16 or later means the aerial technique applies.
+    private static let usesAerial = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 16
+    // Each install writes hundreds of MB, so fast rotation is throttled to one lock screen update per window.
+    private static let installSpacing = Duration.seconds(30)
 
     private var currentStill: URL?
+    // Bumped by every still apply and by restore(); a stale ticket means the work was superseded.
     private var ticket = 0
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var wanted: URL?
+    private var worker: Task<Void, Error>?
+    private var nextInstall = ContinuousClock().now
+    private var isLocked = false
 
-    var hasAppliedStill: Bool { currentStill != nil }
+    var hasAppliedStill: Bool { currentStill != nil || aerialBackup != nil }
 
     init() {}
 
     func apply(from videoURL: URL) async throws {
+        guard Self.usesAerial else {
+            try await applyStill(from: videoURL)
+            return
+        }
+        startObservingLock()
+        // Last call wins: one worker exports whichever video was requested most recently.
+        wanted = videoURL
+        guard worker == nil else { return }
+        let task = Task { try await self.drain() }
+        worker = task
+        try await task.value
+    }
+
+    private func applyStill(from videoURL: URL) async throws {
         ticket += 1
         let mine = ticket
         let image = await VideoStills.cgImage(for: videoURL, maxPixelSize: Self.largestScreenPixelSize())
@@ -109,6 +247,8 @@ private enum StillFiles {
 
     func restore() {
         ticket += 1
+        wanted = nil
+        isLocked = false
         for (center, token) in observers { center.removeObserver(token) }
         observers = []
         let saved = originals
@@ -120,6 +260,81 @@ private enum StillFiles {
         StillFiles.removeAll(except: nil)
         originals = [:]
         currentStill = nil
+        restoreAerial()
+        AerialFiles.removeTemporaryFiles()
+    }
+
+    // Keeps the newest request moving: waits out the spacing window, then converts and installs it.
+    // A request that arrives meanwhile replaces `wanted` and is handled by the next pass.
+    private func drain() async throws {
+        defer { worker = nil }
+        let clock = ContinuousClock()
+        while wanted != nil {
+            let wait = clock.now.duration(to: nextInstall)
+            if wait > .zero { try? await clock.sleep(for: wait) }
+            guard let video = wanted else { return }
+            wanted = nil
+            defer { nextInstall = clock.now.advanced(by: Self.installSpacing) }
+            let mine = ticket
+            let file: URL
+            do {
+                file = try await AerialExport.makeFile(from: video)
+            } catch {
+                if mine == ticket { throw error }
+                continue
+            }
+            guard mine == ticket else {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            try install(file)
+        }
+    }
+
+    private func install(_ file: URL) throws {
+        // The file is moved into place on success, so this only cleans up after a failure.
+        defer { try? FileManager.default.removeItem(at: file) }
+        do {
+            let record = try aerialBackup ?? AerialFiles.chooseSlot()
+            // Persisted before anything moves, so a crash can never strand Apple's original.
+            aerialBackup = record
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: record.slotURL.path), !fileManager.fileExists(atPath: record.backupURL.path) {
+                try fileManager.createDirectory(at: AerialFiles.backups, withIntermediateDirectories: true)
+                try fileManager.moveItem(at: record.slotURL, to: record.backupURL)
+            }
+            try AerialFiles.place(file, at: record.slotURL)
+        } catch let error as LockScreenError {
+            throw error
+        } catch {
+            throw LockScreenError.installFailed(error.localizedDescription)
+        }
+        // While locked, the unlock handler restarts the renderer instead; killing it now would blank the screen.
+        if !isLocked { Self.killall("WallpaperAerialsExtension", "WallpaperAgent") }
+    }
+
+    private func restoreAerial() {
+        guard let record = aerialBackup else { return }
+        if FileManager.default.fileExists(atPath: record.backupURL.path) {
+            // The record stays on failure so the next restore retries.
+            guard (try? AerialFiles.place(record.backupURL, at: record.slotURL)) != nil else { return }
+        }
+        aerialBackup = nil
+        Self.killall("WallpaperAerialsExtension", "WallpaperAgent")
+    }
+
+    private var aerialBackup: AerialBackup? {
+        get {
+            UserDefaults.standard.data(forKey: Self.aerialBackupKey)
+                .flatMap { try? JSONDecoder().decode(AerialBackup.self, from: $0) }
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.aerialBackupKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.aerialBackupKey)
+            }
+        }
     }
 
     private var originals: [String: Original] {
@@ -164,6 +379,34 @@ private enum StillFiles {
                 Task { @MainActor [weak self] in self?.reapplyCurrentStill() }
             }
             observers.append((center, token))
+        }
+    }
+
+    private func startObservingLock() {
+        guard observers.isEmpty else { return }
+        let center: NotificationCenter = DistributedNotificationCenter.default()
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            let token = center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.screenLockChanged(locked) }
+            }
+            observers.append((center, token))
+        }
+    }
+
+    // The renderer wedges into a black screen on later locks unless restarted at unlock.
+    // That restart also picks up a file swapped while the screen was locked.
+    private func screenLockChanged(_ locked: Bool) {
+        isLocked = locked
+        if !locked, aerialBackup != nil { Self.killall("WallpaperAerialsExtension") }
+    }
+
+    private static func killall(_ names: String...) {
+        for name in names {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            process.arguments = [name]
+            process.standardError = FileHandle.nullDevice
+            if (try? process.run()) != nil { process.waitUntilExit() }
         }
     }
 
