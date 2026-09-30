@@ -33,6 +33,8 @@ On macOS 26 (Tahoe) and later the lock screen plays your video. macOS has no pub
 
 One-time setup: open System Settings > Wallpaper, pick any Apple Aerial, wait for it to download and leave it selected. Without a downloaded Aerial the app reports an error instead of applying the lock screen.
 
+The app has no way to tell which downloaded Aerial is the selected one, so it takes the first by file name. If you have downloaded several and the lock screen still shows Apple's video, the wrong one was replaced: Stop the wallpaper so the original is restored, keep only the Aerial you selected in the folder above (move the others out in Finder), and Start again. This is untested.
+
 - Apple's original file is moved to `~/Library/Application Support/LiveWallpaper/Backups/` before the first swap. Stop and Quit move it back. After a crash it is moved back the next time the app launches without resuming playback, or on Stop.
 - Your video is converted without audio and repeated end to end until it lasts about 3 minutes, because the renderer misbehaves when a video ends. The converted file normally keeps the source encoding and can be large, since the repeats add up.
 - Rotation updates the lock screen at most every 30 seconds, always ending on the latest video. The desktop switches at your chosen interval.

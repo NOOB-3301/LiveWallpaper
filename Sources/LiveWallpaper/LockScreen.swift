@@ -186,6 +186,27 @@ private enum AerialExport {
     }
 }
 
+// Distributed notifications are held back while the app is in the background unless delivery is
+// immediate, and an unlock arrives exactly then.
+private final class LockObserver: NSObject {
+    private let onChange: @MainActor (Bool) -> Void
+
+    init(onChange: @escaping @MainActor (Bool) -> Void) {
+        self.onChange = onChange
+        super.init()
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(self, selector: #selector(locked), name: Notification.Name("com.apple.screenIsLocked"),
+                           object: nil, suspensionBehavior: .deliverImmediately)
+        center.addObserver(self, selector: #selector(unlocked), name: Notification.Name("com.apple.screenIsUnlocked"),
+                           object: nil, suspensionBehavior: .deliverImmediately)
+    }
+
+    deinit { DistributedNotificationCenter.default().removeObserver(self) }
+
+    @objc private func locked() { Task { @MainActor [onChange] in onChange(true) } }
+    @objc private func unlocked() { Task { @MainActor [onChange] in onChange(false) } }
+}
+
 @MainActor final class LockScreenWallpaper {
     private static let originalsKey = "LiveWallpaper.originals.v1"
     private static let aerialBackupKey = "LiveWallpaper.aerialBackup.v1"
@@ -202,6 +223,7 @@ private enum AerialExport {
     private var worker: Task<Void, Error>?
     private var nextInstall = ContinuousClock().now
     private var isLocked = false
+    private var lockObserver: LockObserver?
 
     var hasAppliedStill: Bool { currentStill != nil || aerialBackup != nil }
 
@@ -249,6 +271,7 @@ private enum AerialExport {
         ticket += 1
         wanted = nil
         isLocked = false
+        lockObserver = nil
         for (center, token) in observers { center.removeObserver(token) }
         observers = []
         let saved = originals
@@ -383,14 +406,8 @@ private enum AerialExport {
     }
 
     private func startObservingLock() {
-        guard observers.isEmpty else { return }
-        let center: NotificationCenter = DistributedNotificationCenter.default()
-        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
-            let token = center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.screenLockChanged(locked) }
-            }
-            observers.append((center, token))
-        }
+        guard lockObserver == nil else { return }
+        lockObserver = LockObserver { [weak self] locked in self?.screenLockChanged(locked) }
     }
 
     // The renderer wedges into a black screen on later locks unless restarted at unlock.
