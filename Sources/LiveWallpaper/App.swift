@@ -12,7 +12,7 @@ struct LiveWallpaperApp: App {
                 .frame(minWidth: 720, minHeight: 520)
         }
         .defaultSize(width: 800, height: 560)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentMinSize) // the content's minimum frame is the window minimum
 
         MenuBarExtra("Live Wallpaper", systemImage: menuBarSymbol) {
             MenuBarContent(model: model)
@@ -31,6 +31,7 @@ struct LiveWallpaperApp: App {
         AppModel.shared.bootstrap()
     }
 
+    // The wallpaper keeps playing with the window closed; it is reopened from the menu bar.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -73,7 +74,7 @@ struct MenuBarContent: View {
         Divider()
 
         Button("Quit Live Wallpaper") {
-            NSApp.terminate(nil)
+            NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
     }
