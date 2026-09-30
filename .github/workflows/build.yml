@@ -1,0 +1,40 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Swift build (release)
+        run: swift build -c release
+
+      - name: Package app bundle
+        run: ./build.sh
+
+      - name: Zip app bundle
+        run: ditto -c -k --keepParent build/LiveWallpaper.app LiveWallpaper-${{ matrix.os }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveWallpaper-${{ matrix.os }}
+          path: LiveWallpaper-${{ matrix.os }}.zip
+          if-no-files-found: error

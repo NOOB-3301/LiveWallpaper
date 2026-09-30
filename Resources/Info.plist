@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.noob3301.LiveWallpaper</string>
+	<key>CFBundleName</key>
+	<string>Live Wallpaper</string>
+	<key>CFBundleDisplayName</key>
+	<string>Live Wallpaper</string>
+	<key>CFBundleExecutable</key>
+	<string>LiveWallpaper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Live Wallpaper needs access to play the videos you chose.</string>
+</dict>
+</plist>
