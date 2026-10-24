@@ -14,6 +14,14 @@
 
 ![Live Wallpaper settings window: a video wallpaper selected, with Set as Desktop / Lock Screen, rotation and scene frame-rate options](assets/screenshots/library-detail.png)
 
+## Resource Usage
+
+The following Activity Monitor snapshots show the memory footprint of the wallpaper processes in two common usage scenarios:
+
+![Activity Monitor showing wallpaper process memory usage while a scene is rendering](assets/screenshots/resource-usage-scene-rendering.svg)
+
+![Activity Monitor showing wallpaper process memory usage while a video is playing](assets/screenshots/resource-usage-video-playing.svg)
+
 ## Features
 
 - **Video wallpapers**: drop in MP4, MOV or M4V files; they play muted (or with sound) and loop on every display.
