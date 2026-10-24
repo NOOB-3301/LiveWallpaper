@@ -362,7 +362,7 @@ struct WorkshopView: View {
         self.openDownloads = openDownloads
     }
 
-    // Wide windows show the detail pane next to the results; narrow ones replace the results with it.
+    // Wide windows show the detail pane next to the results; narrow ones cover the results with it.
     // The browse task is attached here — the root — so no amount of resizing or detail opening restarts it.
     var body: some View {
         GeometryReader { proxy in
@@ -373,19 +373,25 @@ struct WorkshopView: View {
         .task(id: workshop.searchKey) { await refreshBrowse() }
     }
 
+    /// The results column keeps one place in the view tree whether or not the detail pane is open: moving it
+    /// between branches would rebuild its scroll view and jump back to the top of the list. A narrow window hides it
+    /// under the detail pane instead of removing it, and disables it so its controls ignore the keyboard.
+    /// Its width changes without animation, which AnchoredScrollView needs to keep the same wallpapers in view.
     @ViewBuilder private func content(wide: Bool) -> some View {
-        if let item = detail {
-            if wide {
-                HStack(spacing: 0) {
-                    resultsColumn
-                    Divider()
-                    detailPane(item).frame(width: 380)
-                }
-            } else {
-                detailPane(item)
-            }
-        } else {
+        let covered = detail != nil && !wide
+        HStack(spacing: 0) {
             resultsColumn
+                .animation(nil, value: detail?.id)
+                .opacity(covered ? 0 : 1)
+                .disabled(covered)
+                .accessibilityHidden(covered)
+            if wide, let item = detail {
+                Divider()
+                detailPane(item).frame(width: 380).zIndex(1)
+            }
+        }
+        .overlay {
+            if !wide, let item = detail { detailPane(item) }
         }
     }
 
@@ -395,8 +401,10 @@ struct WorkshopView: View {
             .id(item.id)
     }
 
+    /// Anchored, so the grid keeps showing the same wallpapers, and the one whose details are open, when the detail
+    /// pane narrows or widens it.
     private var resultsColumn: some View {
-        ScrollView {
+        AnchoredScrollView(order: workshop.results.map(\.id), keepingVisible: detail?.id) {
             VStack(alignment: .leading, spacing: LWTheme.sectionSpacing) {
                 LWPageHeader(
                     title: "Workshop",
@@ -705,6 +713,7 @@ struct WorkshopView: View {
                 CompactCard(item: item, actions: actions(for: item, compact: true))
                     .contentShape(Rectangle())
                     .onTapGesture { detail = item }
+                    .scrollAnchorItem(item.id)
             }
         }
     }
