@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Activity Monitor memory usage before optimization</title>
+  <desc id="desc">Activity Monitor filtered for wallpaper processes, showing Live Wallpaper using 121.6 MB and Live Wallpaper Service using 25.5 MB.</desc>
+  <rect width="1600" height="1080" rx="34" fill="#242223"/>
+  <rect x="18" y="18" width="1564" height="1044" rx="30" fill="none" stroke="#555" stroke-width="2"/>
+  <circle cx="58" cy="58" r="12" fill="#ff4d58"/><circle cx="96" cy="58" r="12" fill="#ffc21a"/><circle cx="134" cy="58" r="12" fill="#27c94f"/>
+  <text x="190" y="56" fill="#f2f2f2" font-family="Arial,sans-serif" font-size="25" font-weight="700">Activity Monitor</text>
+  <text x="190" y="80" fill="#999" font-family="Arial,sans-serif" font-size="17">All Processes</text>
+  <rect x="430" y="30" width="640" height="58" rx="30" fill="#292829" stroke="#444" stroke-width="1"/>
+  <text x="475" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="23">CPU</text>
+  <rect x="560" y="37" width="120" height="44" rx="23" fill="#555"/><text x="585" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="23">Memory</text>
+  <text x="718" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="23">Energy</text><text x="858" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="23">Disk</text><text x="958" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="23">Network</text>
+  <rect x="1210" y="30" width="340" height="58" rx="29" fill="#292829" stroke="#2479ad" stroke-width="5"/>
+  <text x="1240" y="67" fill="#eee" font-family="Arial,sans-serif" font-size="22">⌕  wall</text>
+  <line x1="18" y1="112" x2="1582" y2="112" stroke="#4b4b4b"/>
+  <text x="65" y="145" fill="#eee" font-family="Arial,sans-serif" font-size="18" font-weight="700">Process Name</text><text x="980" y="145" fill="#eee" font-family="Arial,sans-serif" font-size="18" font-weight="700">Memory</text>
+  <g font-family="Arial,sans-serif" font-size="19" fill="#ddd">
+    <text x="105" y="195">Live Wallpaper</text><text x="1000" y="195">121.6 MB</text>
+    <rect x="34" y="210" width="1532" height="42" rx="16" fill="#333"/>
+    <text x="105" y="239">Live Wallpaper Service</text><text x="1000" y="239">25.5 MB</text>
+    <text x="105" y="283">Wallpaper</text><text x="1000" y="283">12.3 MB</text>
+    <rect x="34" y="298" width="1532" height="42" rx="16" fill="#333"/>
+    <text x="105" y="327">WallpaperAerialsExtension</text><text x="1000" y="327">10.2 MB</text>
+    <text x="105" y="371">wallpaperexportd</text><text x="1000" y="371">2.1 MB</text>
+  </g>
+  <line x1="18" y1="900" x2="1582" y2="900" stroke="#aaa"/>
+  <rect x="330" y="925" width="940" height="105" rx="8" fill="#292829" stroke="#aaa" stroke-width="2"/>
+  <text x="390" y="956" fill="#aaa" font-family="Arial,sans-serif" font-size="16" font-weight="700">MEMORY PRESSURE</text>
+  <path d="M350 1005 L350 980 420 975 500 985 580 980 660 990 740 970 820 980 900 975 980 985 1060 970 1140 980 1220 975 L1220 1005Z" fill="#8f7130" stroke="#d49b3b"/>
+  <text x="800" y="956" fill="#eee" font-family="Arial,sans-serif" font-size="17">Physical Memory: 16.00 GB</text>
+  <text x="800" y="985" fill="#eee" font-family="Arial,sans-serif" font-size="17">Memory Used: 14.31 GB</text>
+  <text x="1130" y="956" fill="#eee" font-family="Arial,sans-serif" font-size="17">App Memory: 3.39 GB</text>
+  <text x="1130" y="985" fill="#eee" font-family="Arial,sans-serif" font-size="17">Compressed: 6.68 GB</text>
+</svg>
