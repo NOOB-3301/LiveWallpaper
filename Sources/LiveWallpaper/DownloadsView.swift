@@ -31,7 +31,7 @@ struct DownloadsView: View {
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .background(LWBackground())
         .animation(LWMotion.content, value: entries.map(\.id))
     }

@@ -242,7 +242,7 @@ struct LibraryView: View {
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .animation(LWMotion.hero, value: focused?.id)
         .overlay(alignment: .top) {
             if isTargeted {
@@ -854,7 +854,7 @@ struct LibraryInspectorView: View {
             }
             .padding(18)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .alert("Remove this wallpaper?", isPresented: $confirmingRemoval) {
             Button("Remove", role: .destructive, action: remove)
             Button("Cancel", role: .cancel) {}

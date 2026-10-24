@@ -23,7 +23,7 @@ struct PlaylistView: View {
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .background(LWBackground())
         .animation(LWMotion.content, value: tab)
     }
@@ -398,7 +398,7 @@ private struct PlaylistAddSheet: View {
                 }
                 .padding(.vertical, 8)
             }
-            .scrollIndicators(.never)
+            .scrollIndicators(.visible)
 
             Divider()
 

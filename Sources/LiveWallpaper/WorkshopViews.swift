@@ -419,7 +419,7 @@ struct WorkshopView: View {
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .background(LWBackground())
     }
 
@@ -760,7 +760,7 @@ struct SteamSetupView: View {
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .background(LWBackground())
         .onAppear { workshop.recheckSetup() }
         .onChange(of: setup.account) { account in
