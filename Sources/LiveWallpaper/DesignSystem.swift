@@ -577,11 +577,15 @@ struct LWEmptyState: View {
             }
             Text(targeted ? "Release to add" : title)
                 .font(.title3.weight(.semibold))
+            // Never pin this text to its full wrapped height (`fixedSize(vertical:)`): while sizing the window and its
+            // split columns, SwiftUI measures the card at a very narrow width, so a pinned text reports a huge minimum
+            // height. Next to the Library inspector, AppKit then re-solves the window's constraints until it throws
+            // ("more Update Constraints in Window passes than there are views") and the app terminates at launch (seen
+            // on macOS 27). Unpinned, the text still wraps in full: the card always gets the height it asks for.
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 if let actionTitle, let action {
                     Button(actionTitle, action: action)
