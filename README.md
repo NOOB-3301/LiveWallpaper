@@ -16,11 +16,11 @@
 
 ## Resource Usage
 
-The following Activity Monitor snapshots show the memory footprint of the wallpaper processes:
+The following Activity Monitor snapshots show the memory footprint of the wallpaper processes in two common usage scenarios:
 
-![Activity Monitor showing wallpaper process memory usage before optimization](assets/screenshots/resource-usage-before.svg)
+![Activity Monitor showing wallpaper process memory usage while a scene is rendering](assets/screenshots/resource-usage-scene-rendering.svg)
 
-![Activity Monitor showing wallpaper process memory usage after optimization](assets/screenshots/resource-usage-after.svg)
+![Activity Monitor showing wallpaper process memory usage while a video is playing](assets/screenshots/resource-usage-video-playing.svg)
 
 ## Features
 
