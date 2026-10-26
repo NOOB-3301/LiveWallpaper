@@ -63,13 +63,14 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        Group {
+        let plan = Plan(model: model, filter: filter, searchText: searchText)
+        return Group {
             if model.videos.isEmpty {
                 emptyState
-            } else if items.isEmpty {
+            } else if plan.items.isEmpty {
                 noResults
             } else {
-                gallery
+                gallery(plan)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,7 +81,7 @@ struct LibraryView: View {
                 Button {
                     withAnimation(LWMotion.panel) {
                         selectionMode.toggle()
-                        if !selectionMode, let focused { selectedIDs = [focused.id] }
+                        if !selectionMode, let focused = plan.focused { selectedIDs = [focused.id] }
                     }
                 } label: {
                     Image(systemName: selectionMode ? "checkmark.circle.fill" : "checkmark.circle")
@@ -125,27 +126,59 @@ struct LibraryView: View {
                  : "You can download it again from the Workshop.")
         }
         .onAppear { reconcileSelection() }
-        .onChange(of: filter) { _ in reconcileSelection() }
-        .onChange(of: searchText) { _ in reconcileSelection() }
-        .onChange(of: model.videos.map(\.id)) { _ in reconcileSelection() }
+        .onChange(of: filter) { reconcileSelection() }
+        .onChange(of: searchText) { reconcileSelection() }
+        .onChange(of: model.videos.map(\.id)) { reconcileSelection() }
     }
 
     // MARK: Data
 
-    private var state: LibraryState { model.snapshot }
-
-    private var items: [VideoItem] {
-        let state = state
-        return model.videos.filter { item in
-            filter.includes(item, targets: state.targets(of: item.id)) &&
+    /// The library as this page shows it. Single pass, no file stats — the scroll handlers call it too,
+    /// so it has to stay cheaper than the plan around it.
+    private static func visible(_ model: SettingsModel, _ filter: LibraryFilter, _ searchText: String) -> [VideoItem] {
+        model.videos.filter { item in
+            filter.includes(item, targets: model.targets(of: item.id)) &&
             (searchText.isEmpty ||
              item.name.localizedCaseInsensitiveContains(searchText) ||
              (item.author ?? "").localizedCaseInsensitiveContains(searchText))
         }
     }
 
-    private var focused: VideoItem? {
-        items.first { $0.id == model.focusedID } ?? items.first
+    /// Everything the grid renders, resolved once per body evaluation instead of once per card. Resolving it
+    /// per card copied the whole library and re-statted every path, which is what stalled the scroll.
+    @MainActor
+    private struct Plan {
+        let items: [VideoItem]
+        let focusedID: VideoItem.ID?
+        let roles: [VideoItem.ID: Set<WallpaperTarget>]
+        let playing: [VideoItem.ID: Set<WallpaperTarget>]
+        let broken: Set<VideoItem.ID>
+
+        var focused: VideoItem? { items.first { $0.id == focusedID } }
+        func roles(of id: VideoItem.ID) -> Set<WallpaperTarget> { roles[id] ?? [] }
+        func playing(of id: VideoItem.ID) -> Set<WallpaperTarget> { playing[id] ?? [] }
+        func isBroken(_ id: VideoItem.ID) -> Bool { broken.contains(id) }
+
+        init(model: SettingsModel, filter: LibraryFilter, searchText: String) {
+            let visible = LibraryView.visible(model, filter, searchText)
+            var assigned: [VideoItem.ID: Set<WallpaperTarget>] = [:]
+            var onAir: [VideoItem.ID: Set<WallpaperTarget>] = [:]
+            assigned.reserveCapacity(visible.count)
+            if model.isRunning {
+                for target in WallpaperTarget.allCases {
+                    if let id = model.currentID(for: target) { onAir[id, default: []].insert(target) }
+                }
+            }
+            for item in visible {
+                let targets = model.targets(of: item.id)
+                if !targets.isEmpty { assigned[item.id] = targets }
+            }
+            items = visible
+            roles = assigned
+            playing = onAir
+            broken = model.brokenIDs
+            focusedID = visible.first { $0.id == model.focusedID }?.id ?? visible.first?.id
+        }
     }
 
     private var selectionCount: Int { selectedIDs.count }
@@ -156,6 +189,7 @@ struct LibraryView: View {
 
     /// Keeps the multi-selection inside what is visible after a filter, search or library change.
     private func reconcileSelection() {
+        let items = Self.visible(model, filter, searchText)
         let visible = Set(items.map(\.id))
         selectedIDs.formIntersection(visible)
 
@@ -176,6 +210,7 @@ struct LibraryView: View {
     }
 
     private func select(_ item: VideoItem) {
+        let items = Self.visible(model, filter, searchText)
         let flags = NSEvent.modifierFlags
         if flags.contains(.shift), let anchorID,
            let from = items.firstIndex(where: { $0.id == anchorID }),
@@ -196,7 +231,8 @@ struct LibraryView: View {
         if selectedIDs.contains(id) {
             selectedIDs.remove(id)
             if model.focusedID == id {
-                model.focusedID = items.first(where: { selectedIDs.contains($0.id) })?.id ?? id
+                model.focusedID = Self.visible(model, filter, searchText)
+                    .first(where: { selectedIDs.contains($0.id) })?.id ?? id
             }
         } else {
             selectedIDs.insert(id)
@@ -210,15 +246,6 @@ struct LibraryView: View {
         remove(selectedIDs)
     }
 
-    private func isBroken(_ item: VideoItem) -> Bool {
-        model.failedIDs.contains(item.id) || !FileManager.default.fileExists(atPath: item.path)
-    }
-
-    private func playingTargets(of item: VideoItem) -> Set<WallpaperTarget> {
-        guard model.isRunning else { return [] }
-        return Set(WallpaperTarget.allCases.filter { model.currentID(for: $0) == item.id })
-    }
-
     private func renderStatus(of item: VideoItem) -> LockRenderStatus? {
         guard let render = model.lockRender, render.itemID == item.id, render.state != .finished else { return nil }
         return render
@@ -226,50 +253,58 @@ struct LibraryView: View {
 
     // MARK: Content
 
-    private var gallery: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                heading
-                if let item = focused {
-                    LibraryHero(model: model, item: item, broken: isBroken(item),
-                                playing: playingTargets(of: item), render: renderStatus(of: item),
-                                openSteamSetup: openSteamSetup,
-                                remove: { remove([item.id]) })
-                        .transition(.opacity)
+    /// The hero lives outside the scroller. It carries a layer-backed `AVPlayerView`, and taking it out of the
+    /// lazy grid's layout pass is most of why the page felt heavy — only the cards scroll now.
+    private func gallery(_ plan: Plan) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let item = plan.focused {
+                LibraryHero(model: model, item: item, broken: plan.isBroken(item.id),
+                            playing: plan.playing(of: item.id), render: renderStatus(of: item),
+                            openSteamSetup: openSteamSetup,
+                            remove: { remove([item.id]) })
+                    .id(item.id)
+                    .transition(.opacity)
+                    .padding(LWTheme.contentPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    heading(plan)
+                    librarySection(plan)
                 }
-                librarySection
+                .padding(.horizontal, LWTheme.contentPadding)
+                .padding(.bottom, LWTheme.contentPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(LWTheme.contentPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollIndicators(.visible)
-        .animation(LWMotion.hero, value: focused?.id)
-        .overlay(alignment: .top) {
-            if isTargeted {
-                Text("Drop wallpapers to add them")
-                    .font(.callout.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.top, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            .scrollIndicators(.visible)
+            .defaultScrollAnchor(.top)
+            .overlay(alignment: .top) {
+                if isTargeted {
+                    Text("Drop wallpapers to add them")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: isTargeted)
         }
-        .animation(.easeInOut(duration: 0.18), value: isTargeted)
     }
 
-    private var heading: some View {
+    private func heading(_ plan: Plan) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(filter.title)
                 .font(.system(size: 30, weight: .bold))
                 .kerning(-0.4)
-            Text(subtitle)
+            Text(subtitle(plan))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var subtitle: String {
+    private func subtitle(_ plan: Plan) -> String {
         if selectionCount > 1 {
             return "\(selectionCount) selected · click checkmarks to adjust"
         }
@@ -279,22 +314,22 @@ struct LibraryView: View {
                 : "1 selected · click to add or remove"
         }
         if !searchText.isEmpty {
-            return "\(items.count) \(items.count == 1 ? "result" : "results") for “\(searchText)”"
+            return "\(plan.items.count) \(plan.items.count == 1 ? "result" : "results") for “\(searchText)”"
         }
         switch filter {
-        case .all: return "\(items.count) \(items.count == 1 ? "wallpaper" : "wallpapers")"
-        case .desktop: return "\(items.count) set for your desktop"
-        case .lock: return "\(items.count) set for the lock screen"
-        case .scenes: return "\(items.count) Wallpaper Engine \(items.count == 1 ? "scene" : "scenes")"
+        case .all: return "\(plan.items.count) \(plan.items.count == 1 ? "wallpaper" : "wallpapers")"
+        case .desktop: return "\(plan.items.count) set for your desktop"
+        case .lock: return "\(plan.items.count) set for the lock screen"
+        case .scenes: return "\(plan.items.count) Wallpaper Engine \(plan.items.count == 1 ? "scene" : "scenes")"
         }
     }
 
-    @ViewBuilder private var librarySection: some View {
+    @ViewBuilder private func librarySection(_ plan: Plan) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text(filter == .all ? "Your library" : "Wallpapers")
                     .font(.title3.weight(.semibold))
-                Text("\(items.count)")
+                Text("\(plan.items.count)")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -320,13 +355,13 @@ struct LibraryView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: LWTheme.cardMinWidth, maximum: 340),
                                              spacing: LWTheme.gridSpacing)],
                           alignment: .leading, spacing: LWTheme.gridSpacing) {
-                    ForEach(items) { item in
+                    ForEach(plan.items) { item in
                         LibraryCard(item: item,
-                                    broken: isBroken(item),
-                                    roles: state.targets(of: item.id),
-                                    playing: playingTargets(of: item),
+                                    broken: plan.isBroken(item.id),
+                                    roles: plan.roles(of: item.id),
+                                    playing: plan.playing(of: item.id),
                                     paused: model.isPaused,
-                                    focused: item.id == focused?.id,
+                                    focused: item.id == plan.focusedID,
                                     selected: selectedIDs.contains(item.id),
                                     selectionMode: selectionMode,
                                     render: renderStatus(of: item),
@@ -336,17 +371,18 @@ struct LibraryView: View {
                                     assign: { model.assign(item.id, to: $0) },
                                     remove: { remove([item.id]) })
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .lwScrollEntry()
                     }
                 }
             case .list:
                 LazyVStack(spacing: 4) {
-                    ForEach(items) { item in
+                    ForEach(plan.items) { item in
                         LibraryListRow(item: item,
-                                       broken: isBroken(item),
-                                       roles: state.targets(of: item.id),
-                                       playing: playingTargets(of: item),
+                                       broken: plan.isBroken(item.id),
+                                       roles: plan.roles(of: item.id),
+                                       playing: plan.playing(of: item.id),
                                        paused: model.isPaused,
-                                       focused: item.id == focused?.id,
+                                       focused: item.id == plan.focusedID,
                                        selected: selectedIDs.contains(item.id),
                                        selectionMode: selectionMode,
                                        onSelect: { select(item) },
@@ -354,11 +390,11 @@ struct LibraryView: View {
                                        onActivate: { model.play(item.id) },
                                        assign: { model.assign(item.id, to: $0) },
                                        remove: { remove([item.id]) })
+                            .lwScrollEntry()
                     }
                 }
             }
         }
-        .animation(LWMotion.content, value: items.map(\.id))
     }
 
     private var emptyState: some View {
@@ -397,7 +433,7 @@ struct LibraryView: View {
             importFailures = outcome.failed
             showSkipped = outcome.skipped > 0
             showFailures = !outcome.failed.isEmpty
-            reconcileSelection()
+            withAnimation(LWMotion.panel) { reconcileSelection() }
         }
     }
 
@@ -416,15 +452,19 @@ struct LibraryView: View {
         if model.videos.contains(where: { ids.contains($0.id) && $0.isWorkshop }) {
             pendingRemoval = ids
         } else {
-            model.remove(ids: ids)
-            reconcileSelection()
+            withAnimation(LWMotion.panel) {
+                model.remove(ids: ids)
+                reconcileSelection()
+            }
         }
     }
 
     private func finishRemoval() {
-        model.remove(ids: pendingRemoval)
-        pendingRemoval = []
-        reconcileSelection()
+        withAnimation(LWMotion.panel) {
+            model.remove(ids: pendingRemoval)
+            pendingRemoval = []
+            reconcileSelection()
+        }
     }
 
     private var confirmingRemoval: Binding<Bool> {
@@ -606,6 +646,14 @@ private struct LibraryCard: View {
                         .allowsHitTesting(false)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
+                    if hovering {
+                        LinearGradient(colors: [.white.opacity(0.12), .clear],
+                                       startPoint: .top, endPoint: .center)
+                            .allowsHitTesting(false)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .transition(.opacity)
+                    }
+
                     HStack(spacing: 4) {
                         ForEach(WallpaperTarget.allCases) { target in
                             if roles.contains(target) {
@@ -664,7 +712,16 @@ private struct LibraryCard: View {
                                                : Color.primary.opacity(0.07),
                                       lineWidth: selected ? (focused ? 2.5 : 2) : 1)
                 }
-                .shadow(color: .black.opacity(hovering || selected ? 0.20 : 0), radius: 16, y: 8)
+                // A shadow modifier is an offscreen pass whether or not its colour is clear, so the resting
+                // cards get none at all. The fill is hidden by the opaque thumbnail.
+                .background {
+                    if hovering || selected {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(.white)
+                            .shadow(color: .black.opacity(0.20), radius: 16, y: 8)
+                            .transition(.opacity)
+                    }
+                }
                 .animation(LWMotion.hover, value: selected)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -771,7 +828,7 @@ private struct LibraryListRow: View {
             .frame(width: 16, height: 16)
 
             HStack(spacing: 12) {
-                ItemThumbnail(item: item, broken: broken, cornerRadius: 8)
+                ItemThumbnail(item: item, broken: broken, cornerRadius: 8, size: .row)
                     .frame(width: 96, height: 54)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle)
@@ -865,8 +922,8 @@ struct LibraryInspectorView: View {
 
     private func header(_ item: VideoItem) -> some View {
         HStack(spacing: 11) {
-            ItemThumbnail(item: item, broken: !FileManager.default.fileExists(atPath: item.path),
-                          showsHoverPreview: false, cornerRadius: 8)
+            ItemThumbnail(item: item, broken: model.brokenIDs.contains(item.id),
+                          showsHoverPreview: false, cornerRadius: 8, size: .row)
                 .frame(width: 76, height: 43)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(.callout.weight(.semibold)).lineLimit(2).truncationMode(.middle)
@@ -1105,7 +1162,7 @@ struct RotationBlock: View {
             }
         }
         .animation(LWMotion.panel, value: config.rotateEnabled && canRotate)
-        .onChange(of: config.intervalValue) { intervalText = String($0) }
+        .onChange(of: config.intervalValue) { _, value in intervalText = String(value) }
     }
 
     private var intervalRow: some View {
@@ -1117,7 +1174,7 @@ struct RotationBlock: View {
                 .frame(width: 56)
                 .focused($intervalFocused)
                 .onSubmit(commitInterval)
-                .onChange(of: intervalFocused) { if !$0 { commitInterval() } }
+                .onChange(of: intervalFocused) { _, focused in if !focused { commitInterval() } }
                 .accessibilityLabel("Interval value")
             Picker("Interval unit", selection: unitBinding) {
                 ForEach(IntervalUnit.allCases) { Text($0.label.lowercased()).tag($0) }
@@ -1236,7 +1293,11 @@ struct ItemPreviewPane: View {
             .frame(maxWidth: .infinity)
             .task(id: playbackURL) { preview.load(playbackURL) }
             .task(id: item?.previewPath) {
-                sceneImage = item?.previewPath.flatMap { NSImage(contentsOfFile: $0) }
+                guard let path = item?.previewPath else { sceneImage = nil; return }
+                // NSImage keeps the animation frames of a GIF preview, which a downsampled CGImage would drop.
+                // Decoding it is heavy, so it happens off the main actor.
+                let decoded = await Task.detached(priority: .userInitiated) { NSImage(contentsOfFile: path) }.value
+                if !Task.isCancelled { sceneImage = decoded }
             }
             .onAppear { preview.setActive(true) }
             .onDisappear { preview.setActive(false) }

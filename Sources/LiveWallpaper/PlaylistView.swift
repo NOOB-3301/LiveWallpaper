@@ -24,7 +24,6 @@ struct PlaylistView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.visible)
-        .background(LWBackground())
         .animation(LWMotion.content, value: tab)
     }
 }
@@ -209,7 +208,7 @@ private struct PlaylistEditorCard: View {
             }
         }
         .onAppear { ids = storedIDs ?? [] }
-        .onChange(of: storedIDs ?? []) { ids = $0 }
+        .onChange(of: storedIDs ?? []) { _, stored in ids = stored }
         .animation(LWMotion.content, value: isCustom)
     }
 
@@ -257,8 +256,8 @@ private struct PlaylistEditorCard: View {
                 .frame(width: 22, alignment: .trailing)
 
             ItemThumbnail(item: item,
-                          broken: !FileManager.default.fileExists(atPath: item.path),
-                          showsHoverPreview: false, cornerRadius: 6)
+                          broken: model.brokenIDs.contains(item.id),
+                          showsHoverPreview: false, cornerRadius: 6, size: .row)
                 .frame(width: 72, height: 41)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -436,8 +435,8 @@ private struct PlaylistAddSheet: View {
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
                     .frame(width: 18)
                 ItemThumbnail(item: item,
-                              broken: !FileManager.default.fileExists(atPath: item.path),
-                              showsHoverPreview: false, cornerRadius: 5)
+                              broken: model.brokenIDs.contains(item.id),
+                              showsHoverPreview: false, cornerRadius: 5, size: .row)
                     .frame(width: 64, height: 36)
                 Text(item.name)
                     .font(.callout.weight(.medium))

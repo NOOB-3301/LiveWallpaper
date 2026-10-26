@@ -12,7 +12,7 @@ import SceneFormat
     static let minimumInterval: TimeInterval = LibraryState.minimumInterval
 
     // Persisted in state.json; UI-bound. Every change is sent to the service (`.commit`). Bulk changes go through `batch` (one write) and never write while loading.
-    @Published var videos: [VideoItem] = [] { didSet { persist() } }
+    @Published var videos: [VideoItem] = [] { didSet { persist(); refreshBroken() } }
     @Published var selectedID: VideoItem.ID? = nil { didSet { persist() } }
     @Published var rotateEnabled: Bool = false { didSet { persist() } }   // rotation needs a curated playlist
     @Published var intervalValue: Int = 5 {          // clamped to 1...999
@@ -108,8 +108,40 @@ import SceneFormat
         sceneOptions[id.uuidString] = options
     }
 
-    /// Roles of an item for the badges: the enabled targets it is currently selected for.
-    func roles(of id: VideoItem.ID) -> Set<WallpaperTarget> { snapshot.targets(of: id) }
+    /// Roles of an item for the badges: the enabled targets it is currently selected for. Mirrors
+    /// `LibraryState.targets(of:)` without building a whole state value, which the library grid would
+    /// otherwise pay for once per card.
+    func targets(of id: VideoItem.ID) -> Set<WallpaperTarget> {
+        var targets: Set<WallpaperTarget> = []
+        if applyToDesktop, selectedID == id { targets.insert(.desktop) }
+        // `normalize()` mirrors the desktop selection onto the lock screen while sameForBoth.
+        if applyToLockScreen, (sameForBoth ? selectedID : lockConfig.selectedID) == id { targets.insert(.lock) }
+        return targets
+    }
+
+    func roles(of id: VideoItem.ID) -> Set<WallpaperTarget> { targets(of: id) }
+
+    /// Items whose file is gone or that the service failed on. Recomputed off the main actor because a stat
+    /// per item is far too much work to repeat for every card of a grid body.
+    @Published private(set) var brokenIDs: Set<VideoItem.ID> = []
+    private var brokenTask: Task<Void, Never>?
+
+    func refreshBroken() {
+        brokenTask?.cancel()
+        let candidate = videos
+        let failed = failedIDs
+        brokenTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let missing = await Task.detached(priority: .utility) {
+                candidate.reduce(into: [VideoItem.ID]()) { ids, item in
+                    if !FileManager.default.fileExists(atPath: item.path) { ids.append(item.id) }
+                }
+            }.value
+            let next = Set(missing).union(failed)
+            if next != brokenIDs { brokenIDs = next }
+        }
+    }
 
     /// The wallpaper source of `target` as the service reports it: the library item currently shown there.
     func currentID(for target: WallpaperTarget) -> VideoItem.ID? {
@@ -234,6 +266,8 @@ import SceneFormat
         batch {
             if let index = videos.firstIndex(where: { $0.workshopID != nil && $0.workshopID == item.workshopID }) {
                 if selectedID == videos[index].id { selectedID = item.id }
+                // A re-download writes new bytes into the same library folder, so the old preview's decode is stale.
+                ThumbnailCache.shared.invalidate(videos[index])
                 videos[index] = item
             } else {
                 videos.append(item)
@@ -403,6 +437,7 @@ import SceneFormat
     /// A status arrived (reply or push): the service owns `muted` (its menu can toggle it).
     private func statusReceived(_ status: ServiceStatus) {
         if status.muted != muted { batch(persisting: false) { muted = status.muted } }
+        refreshBroken()
     }
 
 

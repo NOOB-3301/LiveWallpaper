@@ -68,7 +68,7 @@ struct SteamWizardView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .onAppear { if !isBusy { setup.refresh() } }
-        .onChange(of: setup.account) { account in accountChanged(account) }
+        .onChange(of: setup.account) { _, account in accountChanged(account) }
     }
 
     // MARK: Steps
