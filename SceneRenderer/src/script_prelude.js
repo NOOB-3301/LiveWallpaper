@@ -146,6 +146,39 @@ function __noopAnimation() {
 	};
 }
 
+// IVideoTexture: the host drives the movie; commands travel as `video:*` writes on the layer and
+// the playhead and duration come back in the layer state each frame.
+class VideoTexture {
+	constructor(layer) { this._layer = layer; this._volume = 1; this._looping = undefined; }
+	play() { __mark(this._layer, 'video:play', true); }
+	pause() { __mark(this._layer, 'video:pause', true); }
+	stop() { __mark(this._layer, 'video:stop', true); }
+	restart() { this.setCurrentTime(0); this.play(); }
+	isPlaying() { return !!this._layer._s.videoPlaying; }
+	get playing() { return this.isPlaying(); }
+	get duration() { return __num(this._layer._s.videoDuration, 0); }
+	getDuration() { return this.duration; }
+	getCurrentTime() { return __num(this._layer._s.videoTime, 0); }
+	setCurrentTime(t) { __mark(this._layer, 'video:time', __num(t, 0)); }
+	get rate() { return __num(this._layer._s.videoRate, 1); }
+	set rate(v) { __mark(this._layer, 'video:rate', __num(v, 1)); }
+	get speed() { return this.rate; }
+	set speed(v) { this.rate = v; }
+	get volume() { return this._volume; }
+	set volume(v) { this._volume = Math.max(0, Math.min(1, __num(v, 1))); }
+	getVolume() { return this._volume; }
+	setVolume(v) { this.volume = v; }
+	get looping() { return this._looping === undefined ? this._layer._s.videoLooping !== false : this._looping; }
+	set looping(v) { this._looping = !!v; __mark(this._layer, 'video:loop', !!v); }
+	isLooping() { return this.looping; }
+	setLooping(v) { this.looping = v; }
+	get width() { return this._layer.size.x; }
+	get height() { return this._layer.size.y; }
+	getWidth() { return this.width; }
+	getHeight() { return this.height; }
+	getName() { return this._layer.name; }
+}
+
 class Layer {
 	constructor(s) { this._s = s; }
 	get id() { return this._s.id; }
@@ -181,7 +214,8 @@ class Layer {
 	// Playback is not driven from scripts yet; the stubs keep scripts that call them from throwing.
 	getAnimation() { return __noopAnimation(); }
 	getTextureAnimation() { return __noopAnimation(); }
-	getVideoTexture() { return null; }
+	// A stand-in video handle: it carries the commands to the renderer, which has the real movie.
+	getVideoTexture() { return new VideoTexture(this); }
 	play() {}
 	pause() {}
 	stop() {}
@@ -488,6 +522,16 @@ globalThis.__lw_frame = function (json) {
 	engine.canvasSize = new Vec2(f.canvas[0], f.canvas[1]);
 	input.cursorScreenPosition = new Vec2(f.cursor[0], f.cursor[1]);
 	input.cursorWorldPosition = new Vec3(f.cursorWorld[0], f.cursorWorld[1], 0);
+	// Video playheads, as { layer id: [seconds, playing] }.
+	if (f.videos) {
+		for (const key in f.videos) {
+			const l = __layers.get(Number(key));
+			if (!l) continue;
+			const v = f.videos[key];
+			l._s.videoTime = __num(v[0], 0);
+			l._s.videoPlaying = !!v[1];
+		}
+	}
 	__cursorEvents(!!f.down);
 	for (const b of __audio) {
 		__fill(b.left, f.left);

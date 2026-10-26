@@ -17,7 +17,11 @@ struct Changes {
 }
 
 fn fixed(value: Value) -> Bound {
-    Bound { value, user: None, condition: None }
+    Bound {
+        value,
+        user: None,
+        condition: None,
+    }
 }
 
 impl Engine {
@@ -41,7 +45,9 @@ impl Engine {
         let mut all = Events::default();
         for id in 0..self.scene.scripts.len() {
             let spec = self.scene.scripts[id].clone();
-            let Some(index) = self.layer_index(spec.layer_id) else { continue };
+            let Some(index) = self.layer_index(spec.layer_id) else {
+                continue;
+            };
             let Some(value) = self.field_value(index, &spec.field) else {
                 self.warnings.push(format!(
                     "layer {}: script on {} not supported",
@@ -49,7 +55,17 @@ impl Engine {
                 ));
                 continue;
             };
-            match host.add(id, spec.layer_id, &spec.field, &spec.source, &spec.properties, &value) {
+            // A script property may follow a user property (`{"user": "peoplex", "value": 0.5}`);
+            // the script sees the user's current value, or the author's fallback.
+            let properties = self.resolve_user_refs(&spec.properties);
+            match host.add(
+                id,
+                spec.layer_id,
+                &spec.field,
+                &spec.source,
+                &properties,
+                &value,
+            ) {
                 Ok(e) => {
                     all.values.extend(e.values);
                     all.dirty.extend(e.dirty);
@@ -73,20 +89,26 @@ impl Engine {
     pub(super) fn run_scripts(&mut self, input: FrameInput, screen: [f32; 2]) {
         // The pointer in scene units (y up), through the same view the frame is drawn with.
         let (l, r, t, b) = self.view_rect(screen[0], screen[1]);
-        let Some(host) = self.script_host.as_mut() else { return };
-        let (w, h) = (self.scene.width, self.scene.height);
+        let videos = self.video_states();
+        let Some(host) = self.script_host.as_mut() else {
+            return;
+        };
+        let h = self.scene.height;
         let [px, py] = input.pointer;
         let state = FrameState {
             time: input.time,
             frame_time: input.frame_time,
             time_of_day: super::day_time(),
             screen,
-            canvas: [w, h],
+            // The wallpaper's own pixel size, like Wallpaper Engine's `engine.canvasSize`: a
+            // fullscreen wallpaper's window is the screen, not the scene's design size.
+            canvas: screen,
             cursor: [input.pointer[0] * screen[0], input.pointer[1] * screen[1]],
             cursor_world: [l + px * (r - l), h - (t + py * (b - t))],
             cursor_down: input.pointer_down,
             left: self.audio[0].clone(),
             right: self.audio[1].clone(),
+            videos,
         };
         let events = match host.frame(&state) {
             Ok(e) => e,
@@ -107,14 +129,46 @@ impl Engine {
         self.script_host.as_ref().is_some_and(Host::animated)
     }
 
+    /// Replaces every `{"user": "<property>", "value": ...}` in a script's property defaults
+    /// with the user's current value of that property, keeping the fallback when unset.
+    fn resolve_user_refs(&self, v: &Value) -> Value {
+        match v {
+            Value::Object(map) => {
+                if let Some(user) = map.get("user").and_then(Value::as_str) {
+                    if let Some(value) = self.props.get(user) {
+                        return value.clone();
+                    }
+                }
+                Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), self.resolve_user_refs(v)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|v| self.resolve_user_refs(v)).collect())
+            }
+            _ => v.clone(),
+        }
+    }
+
     /// The scripts' view of every layer, in draw order.
     fn script_layers(&self) -> Value {
         let layers = self
             .scene
             .layers
             .iter()
-            .map(|l| {
-                json!({
+            .enumerate()
+            .map(|(i, l)| {
+                // A video texture's movie length, so scripts can read `getVideoTexture().duration`
+                // before any frame has run.
+                let video = self
+                    .layers
+                    .get(i)
+                    .and_then(|g| g.image.as_ref())
+                    .and_then(|t| t.video.as_ref())
+                    .map(|p| json!(p.duration));
+                let mut v = json!({
                     "id": l.id,
                     "name": l.name,
                     "parent": l.parent,
@@ -131,7 +185,11 @@ impl Engine {
                         "name": e.name,
                         "visible": e.visible.truthy(&self.props),
                     })).collect::<Vec<_>>(),
-                })
+                });
+                if let Some(video) = video {
+                    v["videoDuration"] = video;
+                }
+                v
             })
             .collect();
         Value::Array(layers)
@@ -157,9 +215,13 @@ impl Engine {
                 let effect = l.effects.get(n)?;
                 match constant {
                     None => Value::Bool(effect.visible.truthy(&self.props)),
-                    Some((pass, key)) => {
-                        effect.passes.get(pass)?.material.constants.get(key)?.get(&self.props)
-                    }
+                    Some((pass, key)) => effect
+                        .passes
+                        .get(pass)?
+                        .material
+                        .constants
+                        .get(key)?
+                        .get(&self.props),
                 }
             }
             _ => {
@@ -173,7 +235,9 @@ impl Engine {
     fn apply_script_events(&mut self, events: Events) {
         let mut changes = Changes::default();
         for (id, value) in events.values {
-            let Some(spec) = self.scene.scripts.get(id) else { continue };
+            let Some(spec) = self.scene.scripts.get(id) else {
+                continue;
+            };
             let (layer_id, field) = (spec.layer_id, spec.field.clone());
             self.set_field(layer_id, &field, value, &mut changes);
         }
@@ -203,7 +267,11 @@ impl Engine {
 
     /// Applies a scene setting a script wrote. Fields the renderer does not read yet are ignored.
     fn set_scene_field(&mut self, field: &str, value: Value) {
-        let fixed = |value: Value| Bound { value, user: None, condition: None };
+        let fixed = |value: Value| Bound {
+            value,
+            user: None,
+            condition: None,
+        };
         match field {
             "bloom" => self.scene.bloom.enabled = fixed(value),
             "bloomstrength" => self.scene.bloom.strength = fixed(value),
@@ -219,13 +287,25 @@ impl Engine {
     }
 
     fn set_field(&mut self, layer_id: i64, field: &str, value: Value, changes: &mut Changes) {
-        let Some(index) = self.layer_index(layer_id) else { return };
+        let Some(index) = self.layer_index(layer_id) else {
+            return;
+        };
+        // `video:*` writes come from a script's IVideoTexture; the renderer applies them to the
+        // layer's video texture directly, with nothing to rebuild.
+        if let Some(cmd) = field.strip_prefix("video:") {
+            self.video_command(layer_id, cmd, &value);
+            return;
+        }
         // `effect:<n>:visible` comes from an IEffect; the renderer checks it every frame.
         if let Some(rest) = field.strip_prefix("effect:") {
             if let Some((n, "visible")) = rest.split_once(':') {
                 if let Ok(n) = n.parse::<usize>() {
                     if let Some(effect) = self.scene.layers[index].effects.get_mut(n) {
-                        effect.visible = Bound { value, user: None, condition: None };
+                        effect.visible = Bound {
+                            value,
+                            user: None,
+                            condition: None,
+                        };
                     }
                 }
             }
@@ -233,12 +313,16 @@ impl Engine {
         }
         if let Some((n, constant)) = effect_field(field) {
             let props = &self.props;
-            let Some(effect) = self.scene.layers[index].effects.get_mut(n) else { return };
+            let Some(effect) = self.scene.layers[index].effects.get_mut(n) else {
+                return;
+            };
             match constant {
                 None => effect.visible = fixed(value),
                 Some((pass, key)) => {
-                    let Some(slot) =
-                        effect.passes.get_mut(pass).and_then(|p| p.material.constants.get_mut(key))
+                    let Some(slot) = effect
+                        .passes
+                        .get_mut(pass)
+                        .and_then(|p| p.material.constants.get_mut(key))
                     else {
                         return;
                     };
@@ -280,7 +364,9 @@ impl Engine {
             }
             "text" => {
                 if let Some(t) = layer.text.as_mut() {
-                    let s = value.as_str().map_or_else(|| value.to_string(), str::to_string);
+                    let s = value
+                        .as_str()
+                        .map_or_else(|| value.to_string(), str::to_string);
                     if t.value != s {
                         t.value = s;
                         changes.text = true;
@@ -292,9 +378,15 @@ impl Engine {
                 changes.place = true;
             }
             _ => {
-                let Some(key) = field.strip_prefix("instanceoverride.") else { return };
-                let Some(p) = layer.particles.as_mut() else { return };
-                let o = p.instance_override.get_or_insert_with(|| Value::Object(Map::new()));
+                let Some(key) = field.strip_prefix("instanceoverride.") else {
+                    return;
+                };
+                let Some(p) = layer.particles.as_mut() else {
+                    return;
+                };
+                let o = p
+                    .instance_override
+                    .get_or_insert_with(|| Value::Object(Map::new()));
                 if let Some(map) = o.as_object_mut() {
                     let _ = map.insert(key.to_string(), value.clone());
                 }
@@ -322,7 +414,11 @@ impl Engine {
             self.layers[i].placed = placed;
             self.layers[i].text_rect = text_rect;
         }
-        let worlds: Vec<_> = self.particles.iter().map(|p| self.world(p.layer, 0)).collect();
+        let worlds: Vec<_> = self
+            .particles
+            .iter()
+            .map(|p| self.world(p.layer, 0))
+            .collect();
         for (p, w) in self.particles.iter_mut().zip(worlds) {
             p.world = w;
         }
@@ -348,27 +444,34 @@ impl Engine {
             }
         }
         for &(id, to) in moves {
-            let Some(from) = self.layer_index(id) else { continue };
+            let Some(from) = self.layer_index(id) else {
+                continue;
+            };
             let layer = self.scene.layers.remove(from);
             let to = to.min(self.scene.layers.len());
             self.scene.layers.insert(to, layer);
         }
-        let new_index = |old: usize| ids.get(old).and_then(|id| self.scene.layers.iter().position(|l| l.id == *id));
+        let new_index = |old: usize| {
+            ids.get(old)
+                .and_then(|id| self.scene.layers.iter().position(|l| l.id == *id))
+        };
         let remap: Vec<Option<usize>> = (0..ids.len()).map(new_index).collect();
-        self.particles.retain_mut(|p| match remap.get(p.layer).copied().flatten() {
-            Some(n) => {
-                p.layer = n;
-                true
-            }
-            None => false,
-        });
-        self.puppets.retain_mut(|p| match remap.get(p.layer).copied().flatten() {
-            Some(n) => {
-                p.layer = n;
-                true
-            }
-            None => false,
-        });
+        self.particles
+            .retain_mut(|p| match remap.get(p.layer).copied().flatten() {
+                Some(n) => {
+                    p.layer = n;
+                    true
+                }
+                None => false,
+            });
+        self.puppets
+            .retain_mut(|p| match remap.get(p.layer).copied().flatten() {
+                Some(n) => {
+                    p.layer = n;
+                    true
+                }
+                None => false,
+            });
         self.sync_script_layers();
     }
 
@@ -407,7 +510,9 @@ fn effect_field(field: &str) -> Option<(usize, Option<(usize, &str)>)> {
     if rest == "visible" {
         return Some((n, None));
     }
-    let (m, key) = rest.strip_prefix("passes[")?.split_once("].constantshadervalues.")?;
+    let (m, key) = rest
+        .strip_prefix("passes[")?
+        .split_once("].constantshadervalues.")?;
     Some((n, Some((m.parse().ok()?, key))))
 }
 

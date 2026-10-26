@@ -18,7 +18,7 @@ naga = { version = "29.0.3", features = ["glsl-in", "msl-out"] }
 serde_json = "1.0"
 thiserror = "2.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-objc2 = "0.6.4"
+objc2 = { version = "0.6.4", features = ["exception"] }
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3"
 objc2-core-text = "0.3"

@@ -200,6 +200,8 @@ struct TexEntry {
     res: [f32; 4],
     frames: Vec<Frame>,
     sampler: usize,
+    /// Set for a video texture: `images[0]` is the texture its frames are uploaded into.
+    video: Option<crate::video::Player>,
 }
 
 impl TexEntry {
@@ -405,6 +407,10 @@ pub struct Engine {
     /// Latest audio spectrum, left and right, 0..1 per band.
     pub audio: [Vec<f32>; 2],
     pub sounds: crate::sound::Sounds,
+    /// Video textures by cache key; weak, so they are dropped with their `TexEntry`.
+    videos: Vec<(String, std::rc::Weak<TexEntry>)>,
+    /// Scene time of the previous frame, to tell stepping from seeking.
+    last_input_time: Option<f32>,
 }
 
 impl Engine {
@@ -420,6 +426,7 @@ impl Engine {
                 images: vec![gpu.solid(rgba)?],
                 res: [1.0; 4],
                 frames: Vec::new(),
+                video: None,
                 sampler: 1,
             }))
         };
@@ -459,6 +466,8 @@ impl Engine {
             script_host: None,
             audio: [vec![0.0; 64], vec![0.0; 64]],
             sounds,
+            videos: Vec::new(),
+            last_input_time: None,
         };
         engine.rebuild();
         engine.start_scripts();
@@ -469,7 +478,9 @@ impl Engine {
     /// programs and pipelines are cached, so only changed combos compile anything.
     pub fn rebuild(&mut self) {
         self.composite_refs = self.find_composite_refs();
-        let layers = (0..self.scene.layers.len()).map(|i| self.build_layer(i)).collect();
+        let layers = (0..self.scene.layers.len())
+            .map(|i| self.build_layer(i))
+            .collect();
         self.layers = layers;
         // Running simulations and loaded meshes survive a rebuild; only new layers load.
         let mut old_systems = std::mem::take(&mut self.particles);
@@ -526,6 +537,12 @@ impl Engine {
         self.puppets = puppets;
         // Drop textures nothing draws any more (hidden by a property change).
         self.textures.retain(|_, t| Rc::strong_count(t) > 1);
+        self.videos = self
+            .textures
+            .iter()
+            .filter(|(_, t)| t.video.is_some())
+            .map(|(k, t)| (k.clone(), Rc::downgrade(t)))
+            .collect();
         let mut seen = std::collections::HashSet::new();
         self.warnings.retain(|w| seen.insert(w.clone()));
     }
@@ -546,14 +563,19 @@ impl Engine {
         // (layer index, buffer name) for every composite a layer samples.
         let sources = |i: usize| -> Vec<(usize, String)> {
             let layer = &self.scene.layers[i];
-            let passes = layer.effects.iter().flat_map(|e| e.passes.iter().map(|p| &p.material));
+            let passes = layer
+                .effects
+                .iter()
+                .flat_map(|e| e.passes.iter().map(|p| &p.material));
             layer
                 .material
                 .iter()
                 .chain(passes)
                 .flat_map(|m| m.textures.iter().flatten())
                 .filter_map(|name| {
-                    let (id, _) = name.strip_prefix("_rt_imageLayerComposite_")?.rsplit_once('_')?;
+                    let (id, _) = name
+                        .strip_prefix("_rt_imageLayerComposite_")?
+                        .rsplit_once('_')?;
                     let id = id.parse::<i64>().ok()?;
                     let target = self.scene.layers.iter().position(|l| l.id == id)?;
                     (target != i).then(|| (target, name.clone()))
@@ -721,7 +743,9 @@ impl Engine {
         );
         let still = !effects.is_empty()
             && !base.as_ref().is_some_and(|b| b.reads_frame)
-            && image.as_ref().is_none_or(|t| t.frames.len() <= 1)
+            && image
+                .as_ref()
+                .is_none_or(|t| t.frames.len() <= 1 && t.video.is_none())
             && !placed.is_some_and(|p| p.compose)
             && items
                 .into_iter()
@@ -830,6 +854,7 @@ impl Engine {
             images: vec![texture],
             res: [w, h, w, h],
             frames: Vec::new(),
+            video: None,
             sampler: 0,
         });
         let _ = self.textures.insert(key.clone(), entry);
@@ -857,15 +882,28 @@ impl Engine {
 
     /// Loads a puppet model, its index buffer and the bind-pose data skinning needs.
     /// The puppet's enabled animation layers with the user's property values applied.
-    fn puppet_animations(&self, model: &puppet::Puppet, layer: &PuppetLayer) -> Vec<(usize, f32, f32, bool)> {
-        let num = |b: &scene::Bound, d: f32| floats(&b.get(&self.props)).first().copied().unwrap_or(d);
+    fn puppet_animations(
+        &self,
+        model: &puppet::Puppet,
+        layer: &PuppetLayer,
+    ) -> Vec<(usize, f32, f32, bool)> {
+        let num =
+            |b: &scene::Bound, d: f32| floats(&b.get(&self.props)).first().copied().unwrap_or(d);
         layer
             .animations
             .iter()
             .filter(|a| a.visible.truthy(&self.props))
             .filter_map(|a| {
-                let found = model.animations.iter().position(|anim| anim.id as i64 == a.id)?;
-                Some((found, num(&a.rate, 1.0), num(&a.blend, 1.0).clamp(0.0, 1.0), a.additive))
+                let found = model
+                    .animations
+                    .iter()
+                    .position(|anim| anim.id as i64 == a.id)?;
+                Some((
+                    found,
+                    num(&a.rate, 1.0),
+                    num(&a.blend, 1.0).clamp(0.0, 1.0),
+                    a.additive,
+                ))
             })
             .collect()
     }
@@ -876,7 +914,11 @@ impl Engine {
             .read(&layer.model)
             .ok_or_else(|| Error::Missing(layer.model.clone()))?;
         let model = Rc::new(puppet::Puppet::parse(&data)?);
-        let bind: Vec<_> = model.bones.iter().map(|b| mat::decompose(&b.local)).collect();
+        let bind: Vec<_> = model
+            .bones
+            .iter()
+            .map(|b| mat::decompose(&b.local))
+            .collect();
         // Bind-pose world matrices, then their inverses for the skinning transform.
         let mut world = vec![mat::IDENTITY; model.bones.len()];
         for (i, bone) in model.bones.iter().enumerate() {
@@ -892,12 +934,7 @@ impl Engine {
             .layers
             .get(index)
             .and_then(|l| l.material.as_ref())
-            .map(|m| {
-                (
-                    m.textures.first().cloned().flatten(),
-                    m.blend,
-                )
-            })
+            .map(|m| (m.textures.first().cloned().flatten(), m.blend))
             .unwrap_or((None, Blend::Translucent));
         let texture = texture_name.and_then(|name| self.texture(&name));
         let indices_ptr = NonNull::new(model.indices.as_ptr() as *mut c_void)
@@ -955,7 +992,10 @@ impl Engine {
                 if w <= 0.0 {
                     continue;
                 }
-                let skin = bones.get(v.bone_indices[k] as usize).copied().unwrap_or(mat::IDENTITY);
+                let skin = bones
+                    .get(v.bone_indices[k] as usize)
+                    .copied()
+                    .unwrap_or(mat::IDENTITY);
                 let q = mat::point(&skin, v.position);
                 pos[0] += q[0] * w;
                 pos[1] += q[1] * w;
@@ -1018,7 +1058,11 @@ impl Engine {
     }
 
     /// Loads a particle layer's system, its instance overrides and the texture it draws with.
-    fn particle_system(&mut self, index: usize, layer: &ParticleLayer) -> Result<ParticleGpu, Error> {
+    fn particle_system(
+        &mut self,
+        index: usize,
+        layer: &ParticleLayer,
+    ) -> Result<ParticleGpu, Error> {
         let json = self.vfs.json(&layer.system)?;
         let system = particles::ParticleSystem::from_json(&json)?;
         // A fixed seed per layer keeps a frozen frame, and the golden harness, reproducible.
@@ -1132,7 +1176,16 @@ impl Engine {
                     let ly = y + dx * s + dy * c;
                     let wx = world[0] * lx + world[4] * ly + world[12];
                     let wy = world[1] * lx + world[5] * ly + world[13];
-                    for f in [wx, wy, u, v, q.color.x * cr, q.color.y * cg, q.color.z * cb, alpha] {
+                    for f in [
+                        wx,
+                        wy,
+                        u,
+                        v,
+                        q.color.x * cr,
+                        q.color.y * cg,
+                        q.color.z * cb,
+                        alpha,
+                    ] {
                         verts.extend_from_slice(&f.to_le_bytes());
                     }
                 }
@@ -1142,7 +1195,9 @@ impl Engine {
         if verts.is_empty() {
             return Ok(());
         }
-        let pipeline = self.gpu.particle_pipeline(blend, TARGET_FORMAT, self.samples)?;
+        let pipeline = self
+            .gpu
+            .particle_pipeline(blend, TARGET_FORMAT, self.samples)?;
         enc.setRenderPipelineState(&pipeline);
         let uniform: Vec<u8> = view_projection
             .iter()
@@ -1199,6 +1254,7 @@ impl Engine {
                 data,
             }]],
             frames: Vec::new(),
+            video: None,
         };
         self.gpu.upload(&tex, 0, false)
     }
@@ -1210,7 +1266,11 @@ impl Engine {
 
     /// `color` decides how one- and two-channel files read; see `Gpu::upload`.
     fn texture_as(&mut self, name: &str, color: bool) -> Option<Rc<TexEntry>> {
-        let key = if color { name.to_string() } else { format!("{name}#raw") };
+        let key = if color {
+            name.to_string()
+        } else {
+            format!("{name}#raw")
+        };
         if let Some(t) = self.textures.get(&key) {
             return Some(t.clone());
         }
@@ -1218,6 +1278,23 @@ impl Engine {
             let path = format!("materials/{name}.tex");
             let data = self.vfs.read(&path).ok_or(Error::Missing(path))?;
             let tex = crate::tex::decode(&data)?;
+            if let Some(movie) = &tex.video {
+                let player = crate::video::Player::new(movie)?;
+                let texture = self.gpu.video_texture(player.size.0, player.size.1)?;
+                self.gpu.clear_texture(&texture);
+                return Ok(TexEntry {
+                    images: vec![texture],
+                    res: [
+                        player.size.0 as f32,
+                        player.size.1 as f32,
+                        player.size.0 as f32,
+                        player.size.1 as f32,
+                    ],
+                    frames: Vec::new(),
+                    sampler: usize::from(!tex.clamp) + 2 * usize::from(tex.nearest),
+                    video: Some(player),
+                });
+            }
             let images = (0..tex.images.len())
                 .map(|i| self.gpu.upload(&tex, i, color))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -1232,6 +1309,7 @@ impl Engine {
                 ],
                 frames: tex.frames,
                 sampler,
+                video: None,
             })
         })();
         match loaded {
@@ -1342,7 +1420,8 @@ impl Engine {
                         TexSource::Image(self.white.clone())
                     } else {
                         TexSource::Image(
-                            self.texture_as(default, index == 0).unwrap_or_else(|| self.black.clone()),
+                            self.texture_as(default, index == 0)
+                                .unwrap_or_else(|| self.black.clone()),
                         )
                     }
                 }
@@ -1496,7 +1575,9 @@ impl Engine {
             if l.attachment.is_some() {
                 return true;
             }
-            layer = l.parent.and_then(|p| self.scene.layers.iter().find(|x| x.id == p));
+            layer = l
+                .parent
+                .and_then(|p| self.scene.layers.iter().find(|x| x.id == p));
         }
         false
     }
@@ -1514,7 +1595,11 @@ impl Engine {
         // The file is y up from the design's bottom-left (a child's origin is an offset from its
         // parent, also y up); the renderer works y down from the top-left, like Metal textures.
         let y = get(&o, 1, 0.0);
-        let y = if parent.is_some() { -y } else { self.scene.height - y };
+        let y = if parent.is_some() {
+            -y
+        } else {
+            self.scene.height - y
+        };
         let local = mul(
             &mul(
                 &translate(get(&o, 0, 0.0), y, 0.0),
@@ -1523,10 +1608,12 @@ impl Engine {
             &scale(get(&s, 0, 1.0), get(&s, 1, 1.0), 1.0),
         );
         // A layer attached to a puppet follows the attachment point as the bones move.
-        let attached = parent.zip(layer.attachment.as_deref()).and_then(|(p, name)| {
-            let puppet = self.puppets.iter().find(|g| g.layer == p)?;
-            puppet.attachment_at(name, self.pose_time)
-        });
+        let attached = parent
+            .zip(layer.attachment.as_deref())
+            .and_then(|(p, name)| {
+                let puppet = self.puppets.iter().find(|g| g.layer == p)?;
+                puppet.attachment_at(name, self.pose_time)
+            });
         let local = match attached {
             Some(a) => mul(&a, &local),
             None => local,
@@ -1538,7 +1625,10 @@ impl Engine {
         // Applied after the parent, in design units: a child moves with its parent's shift plus
         // its own, and a parent's scale does not stretch it.
         let depth = floats(&layer.parallax_depth.get(&self.props));
-        let depth = [depth.first().copied().unwrap_or(0.0), depth.get(1).copied().unwrap_or(0.0)];
+        let depth = [
+            depth.first().copied().unwrap_or(0.0),
+            depth.get(1).copied().unwrap_or(0.0),
+        ];
         let [dx, dy] = parallax_offset(depth, self.parallax_shift, self.parallax_margin());
         if dx == 0.0 && dy == 0.0 {
             return world;
@@ -1548,9 +1638,15 @@ impl Engine {
 
     /// Whether the layer is text whose string a script sets, so it changes between frames.
     fn has_scripted_text(&self, index: usize) -> bool {
-        let Some(layer) = self.scene.layers.get(index) else { return false };
+        let Some(layer) = self.scene.layers.get(index) else {
+            return false;
+        };
         layer.text.is_some()
-            && self.scene.scripts.iter().any(|s| s.layer_id == layer.id && s.field.starts_with("text"))
+            && self
+                .scene
+                .scripts
+                .iter()
+                .any(|s| s.layer_id == layer.id && s.field.starts_with("text"))
     }
 
     fn visible(&self, index: usize) -> bool {
@@ -1621,6 +1717,7 @@ impl Engine {
         let (tw, th) = (target.width() as f32, target.height() as f32);
         self.run_scripts(input, [tw, th]);
         self.follow_motion(input);
+        self.step_videos(input.time, false);
         if self.samples > 1
             && self
                 .msaa
@@ -1644,12 +1741,16 @@ impl Engine {
         let fit = tw / (r - l).max(0.001);
 
         let mut c = [0.0f32; 3];
-        for (o, v) in c.iter_mut().zip(floats(&self.scene.clear_color.get(&self.props))) {
+        for (o, v) in c
+            .iter_mut()
+            .zip(floats(&self.scene.clear_color.get(&self.props)))
+        {
             *o = v;
         }
         // The blurred-fit mode draws the scene into a texture first: the empty part of the
         // target is then filled with a blurred copy of the same picture.
-        let blurred = self.fit == FitMode::MatchBlurred && leaves_gaps(self.content_rect(tw, th), tw, th);
+        let blurred =
+            self.fit == FitMode::MatchBlurred && leaves_gaps(self.content_rect(tw, th), tw, th);
         let bloom = self.scene.bloom.enabled.truthy(&self.props);
         let scene_tex = if blurred || bloom {
             Some(self.pool.take(&self.gpu, target.width(), target.height())?)
@@ -1768,7 +1869,17 @@ impl Engine {
                     let out = self.pool.take(&self.gpu, fw, fh)?;
                     let enc = gpu::begin(cb, &out, None, Some([0.0; 4]))?;
                     let rect = [0.0, 0.0, uv[0], uv[1]];
-                    self.composite_rect(&enc, &t.images[0], t.sampler, Blend::Disabled, 1, FBO_MVP, rect, [1.0; 3], 1.0)?;
+                    self.composite_rect(
+                        &enc,
+                        &t.images[0],
+                        t.sampler,
+                        Blend::Disabled,
+                        1,
+                        FBO_MVP,
+                        rect,
+                        [1.0; 3],
+                        1.0,
+                    )?;
                     enc.endEncoding();
                     let _ = frame_copy.insert(name.clone(), out.clone());
                     let _ = composites.insert(name.clone(), out);
@@ -1796,7 +1907,10 @@ impl Engine {
                         // Puppet vertices are in design units, y up: the layer transform without the
                         // box scale, flipped into the y-down design space.
                         let flip = mul(&world, &scale(1.0, -1.0, 1.0));
-                        let pctx = DrawCtx { mvp: mul(&view_projection, &flip), ..ctx };
+                        let pctx = DrawCtx {
+                            mvp: mul(&view_projection, &flip),
+                            ..ctx
+                        };
                         self.draw_puppet(enc, li, &pctx, input, self.samples)?;
                     }
                     Some(item) if visible_effects.is_empty() => {
@@ -1881,7 +1995,12 @@ impl Engine {
                 if is_puppet {
                     // The buffer spans the layer box, so map design units (y up) onto the unit quad (y down).
                     let inv = scale(1.0 / size[0].max(1.0), -1.0 / size[1].max(1.0), 1.0);
-                    let pctx = DrawCtx { mvp: mul(&FBO_MVP, &inv), color: [1.0; 3], alpha: 1.0, ..ctx };
+                    let pctx = DrawCtx {
+                        mvp: mul(&FBO_MVP, &inv),
+                        color: [1.0; 3],
+                        alpha: 1.0,
+                        ..ctx
+                    };
                     self.draw_puppet(&enc, li, &pctx, input, 1)?;
                 } else if let Some(item) = &self.layers[li].base_fx {
                     // A compose layer samples the screen behind it, so it keeps its real placement.
@@ -1969,7 +2088,10 @@ impl Engine {
             // With a colour blend mode, the layer's own material blends the result with the screen.
             // A compose layer's own shader covers the whole target, so its result is composited
             // into the layer's box instead.
-            let blended = self.layers[li].base.as_ref().filter(|b| b.reads_frame && !compose);
+            let blended = self.layers[li]
+                .base
+                .as_ref()
+                .filter(|b| b.reads_frame && !compose);
             let enc = match blended {
                 Some(_) => {
                     self.copy_frame(cb, None, scene_target, msaa.as_deref(), &mut frame_copy)?
@@ -2008,13 +2130,33 @@ impl Engine {
             let tint = floats(&self.scene.bloom.tint.get(&self.props));
             let tint = [0, 1, 2].map(|i| tint.get(i).copied().unwrap_or(1.0));
             let enc = gpu::begin(cb, scene_tex, None, None)?;
-            self.composite_rect(&enc, &glow, 0, Blend::Additive, 1, FBO_MVP, [0.0, 0.0, 1.0, 1.0], tint, 1.0)?;
+            self.composite_rect(
+                &enc,
+                &glow,
+                0,
+                Blend::Additive,
+                1,
+                FBO_MVP,
+                [0.0, 0.0, 1.0, 1.0],
+                tint,
+                1.0,
+            )?;
             enc.endEncoding();
             self.pool.give(glow);
         }
         if let Some(scene_tex) = scene_tex.clone().filter(|_| !blurred) {
             let enc = gpu::begin(cb, target, None, None)?;
-            self.composite_rect(&enc, &scene_tex, 0, Blend::Disabled, 1, FBO_MVP, [0.0, 0.0, 1.0, 1.0], [1.0; 3], 1.0)?;
+            self.composite_rect(
+                &enc,
+                &scene_tex,
+                0,
+                Blend::Disabled,
+                1,
+                FBO_MVP,
+                [0.0, 0.0, 1.0, 1.0],
+                [1.0; 3],
+                1.0,
+            )?;
             enc.endEncoding();
             self.pool.give(scene_tex);
         } else if let Some(scene_tex) = scene_tex {
@@ -2155,7 +2297,11 @@ impl Engine {
 
     /// The scene's glow: bright parts at a quarter of the size, blurred twice. Bloom is
     /// low-frequency, so the small buffers lose nothing visible.
-    fn bloom(&mut self, cb: &gpu::CommandBuffer, src: &Texture) -> Result<Retained<Texture>, Error> {
+    fn bloom(
+        &mut self,
+        cb: &gpu::CommandBuffer,
+        src: &Texture,
+    ) -> Result<Retained<Texture>, Error> {
         let b = &self.scene.bloom;
         let num = |v: Value, d: f32| floats(&v).first().copied().unwrap_or(d);
         let threshold = num(b.threshold.get(&self.props), 0.65);
@@ -2163,8 +2309,18 @@ impl Engine {
         let (w, h) = ((src.width() / 4).max(1), (src.height() / 4).max(1));
         let a = self.pool.take(&self.gpu, w, h)?;
         let enc = gpu::begin(cb, &a, None, Some([0.0; 4]))?;
-        let texel = (1.0 / src.width().max(1) as f32, 1.0 / src.height().max(1) as f32);
-        self.blur_library_pass(&enc, "lw_bright_fs", src, [0.0, 0.0, 1.0, 1.0], texel, [threshold, strength])?;
+        let texel = (
+            1.0 / src.width().max(1) as f32,
+            1.0 / src.height().max(1) as f32,
+        );
+        self.blur_library_pass(
+            &enc,
+            "lw_bright_fs",
+            src,
+            [0.0, 0.0, 1.0, 1.0],
+            texel,
+            [threshold, strength],
+        )?;
         enc.endEncoding();
         let out = a;
         for radius in [1.0f32, 2.5] {
@@ -2199,7 +2355,10 @@ impl Engine {
                 Some(t) => (t, [0.0, 0.0, 1.0, 1.0]),
                 None => (src, rect),
             };
-            let texel = (1.0 / input.width().max(1) as f32, 1.0 / input.height().max(1) as f32);
+            let texel = (
+                1.0 / input.width().max(1) as f32,
+                1.0 / input.height().max(1) as f32,
+            );
             let enc = gpu::begin(cb, &next, None, Some([0.0; 4]))?;
             self.blur_library_pass(&enc, "lw_bright_fs", input, area, texel, [0.0, 1.0])?;
             enc.endEncoding();
@@ -2411,6 +2570,136 @@ impl Engine {
         };
     }
 
+    /// Whether any video texture is playing; such a scene keeps drawing.
+    fn videos_playing(&self) -> bool {
+        self.videos.iter().any(|(_, w)| {
+            w.upgrade()
+                .is_some_and(|t| t.video.as_ref().is_some_and(|p| p.state().0))
+        })
+    }
+
+    /// Advances every video to `time` (the scene clock) and uploads the frames that changed.
+    /// Sequential frames step the playhead; a jump (the offscreen recorder) seeks instead, and
+    /// `wait` gives the decoder a moment to catch up.
+    fn step_videos(&mut self, time: f32, wait: bool) {
+        self.show_videos_at(time, u64::from(wait) * 250, true);
+    }
+
+    /// Offscreen entry point: videos show their frame at `time`, waiting for the decoder.
+    pub fn offscreen_videos(&mut self, time: f32) {
+        self.show_videos_at(time, 500, false);
+    }
+
+    /// Rewinds every video; the loop stopped, and play resumes from the start.
+    pub fn reset_videos(&mut self) {
+        for (_, weak) in &self.videos {
+            if let Some(entry) = weak.upgrade() {
+                if let Some(player) = &entry.video {
+                    player.stop();
+                }
+            }
+        }
+        self.last_input_time = None;
+    }
+
+    fn show_videos_at(&mut self, time: f32, wait_ms: u64, stepping: bool) {
+        if self.videos.is_empty() {
+            self.last_input_time = Some(time);
+            return;
+        }
+        let delta = self.last_input_time.map(|last| time - last);
+        let step = stepping && delta.is_some_and(|d| (0.0..=1.0).contains(&d));
+        self.last_input_time = Some(time);
+        let entries: Vec<Rc<TexEntry>> = self
+            .videos
+            .iter()
+            .filter_map(|(_, w)| w.upgrade())
+            .filter(|t| t.video.is_some())
+            .collect();
+        for entry in &entries {
+            let Some(player) = entry.video.as_ref() else {
+                continue;
+            };
+            let changed = if step {
+                player.advance(delta.unwrap_or(0.0))
+            } else {
+                player.show_at(time as f64, wait_ms)
+            };
+            if changed {
+                self.upload_video_frame(entry);
+            }
+        }
+    }
+
+    /// Copies the player's current frame into the entry's texture.
+    fn upload_video_frame(&self, entry: &Rc<TexEntry>) {
+        let Some(player) = entry.video.as_ref() else {
+            return;
+        };
+        let Some(texture) = entry.images.first() else {
+            return;
+        };
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: texture.width(),
+                height: texture.height(),
+                depth: 1,
+            },
+        };
+        // The player locks the pixel buffer for the call and hands us one BGRA row.
+        let _ = player.with_pixels(|ptr, row| {
+            let Some(ptr) = NonNull::new(ptr as *mut c_void) else {
+                return;
+            };
+            // SAFETY: replaceRegion copies `width * 4` bytes from each of `height` rows now.
+            unsafe { texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row) };
+        });
+    }
+
+    /// A script's video command for a layer's video texture (`getVideoTexture()` writes).
+    fn video_command(&mut self, layer_id: i64, cmd: &str, value: &Value) {
+        let Some(index) = self.scene.layers.iter().position(|l| l.id == layer_id) else {
+            return;
+        };
+        let Some(entry) = self.layers.get(index).and_then(|l| l.image.clone()) else {
+            return;
+        };
+        let Some(player) = entry.video.as_ref() else {
+            return;
+        };
+        match cmd {
+            "play" => player.play(),
+            "pause" => player.pause(),
+            "stop" => player.stop(),
+            "time" => {
+                if let Some(t) = value.as_f64() {
+                    player.seek(t);
+                }
+            }
+            "rate" => {
+                if let Some(r) = value.as_f64() {
+                    player.set_rate(r as f32);
+                }
+            }
+            "loop" => player.set_looping(crate::scene::truthy(value)),
+            _ => {}
+        }
+    }
+
+    /// Every layer with a video texture: (layer id, playhead, playing), for the scripts.
+    fn video_states(&self) -> Vec<(i64, f64, bool)> {
+        self.layers
+            .iter()
+            .zip(self.scene.layers.iter())
+            .filter_map(|(g, l)| {
+                let player = g.image.as_ref()?.video.as_ref()?;
+                let (playing, time) = player.state();
+                Some((l.id, time, playing))
+            })
+            .collect()
+    }
+
     /// Whether frames differ over time. Static scenes draw once and then idle.
     pub fn is_animated(&self) -> bool {
         let items = self.layers.iter().flat_map(|l| {
@@ -2427,6 +2716,7 @@ impl Engine {
             .filter_map(|l| l.image.as_ref())
             .any(|t| t.frames.len() > 1);
         sprites
+            || self.videos_playing()
             || !self.particles.is_empty()
             || self.puppets.iter().any(|p| !p.animations.is_empty())
             || self.scripts_animated()
@@ -2475,10 +2765,30 @@ fn axis_scale(m: &Mat4) -> [f32; 2] {
 /// target itself), as texture coordinates `[u0, v0, u1, v1]` of the quad.
 fn visible_uv(mvp: &Mat4, reach: f32) -> [f32; 4] {
     let inv = invert_affine_2d(mvp);
-    let p = [[-reach, -reach], [reach, -reach], [-reach, reach], [reach, reach]]
-        .map(|[x, y]| [inv[0] * x + inv[4] * y + inv[12] + 0.5, inv[1] * x + inv[5] * y + inv[13] + 0.5]);
-    let lo = |a: usize| p.iter().map(|c| c[a]).fold(f32::INFINITY, f32::min).clamp(0.0, 1.0);
-    let hi = |a: usize| p.iter().map(|c| c[a]).fold(f32::NEG_INFINITY, f32::max).clamp(0.0, 1.0);
+    let p = [
+        [-reach, -reach],
+        [reach, -reach],
+        [-reach, reach],
+        [reach, reach],
+    ]
+    .map(|[x, y]| {
+        [
+            inv[0] * x + inv[4] * y + inv[12] + 0.5,
+            inv[1] * x + inv[5] * y + inv[13] + 0.5,
+        ]
+    });
+    let lo = |a: usize| {
+        p.iter()
+            .map(|c| c[a])
+            .fold(f32::INFINITY, f32::min)
+            .clamp(0.0, 1.0)
+    };
+    let hi = |a: usize| {
+        p.iter()
+            .map(|c| c[a])
+            .fold(f32::NEG_INFINITY, f32::max)
+            .clamp(0.0, 1.0)
+    };
     [lo(0), lo(1), hi(0), hi(1)]
 }
 
@@ -2491,14 +2801,23 @@ fn scissor(enc: &gpu::Encoder, target: &Texture, uv: [f32; 4]) {
     let y1 = ((uv[3] * h).ceil() as usize).clamp(y + 1, target.height());
     let x = x.min(target.width() - 1);
     let y = y.min(target.height() - 1);
-    enc.setScissorRect(MTLScissorRect { x, y, width: x1 - x, height: y1 - y });
+    enc.setScissorRect(MTLScissorRect {
+        x,
+        y,
+        width: x1 - x,
+        height: y1 - y,
+    });
 }
 
 /// Whether the centred unit quad, put through `mvp` (an orthographic one), lies wholly outside
 /// clip space.
 fn off_target(mvp: &Mat4) -> bool {
-    let corners = [[-0.5f32, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]
-        .map(|[x, y]| [mvp[0] * x + mvp[4] * y + mvp[12], mvp[1] * x + mvp[5] * y + mvp[13]]);
+    let corners = [[-0.5f32, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|[x, y]| {
+        [
+            mvp[0] * x + mvp[4] * y + mvp[12],
+            mvp[1] * x + mvp[5] * y + mvp[13],
+        ]
+    });
     (0..2).any(|a| corners.iter().all(|c| c[a] > 1.0) || corners.iter().all(|c| c[a] < -1.0))
 }
 
@@ -2658,7 +2977,6 @@ fn write_uniform(bytes: &mut [u8], u: &Uniform, v: &[f32]) {
     }
 }
 
-
 /// Where an animation is after `t` seconds, by its play mode: `mirror` plays forward then back,
 /// `single` plays once and holds the last frame, anything else loops.
 fn anim_seconds(mode: &str, t: f32, duration: f32) -> f32 {
@@ -2668,7 +2986,11 @@ fn anim_seconds(mode: &str, t: f32, duration: f32) -> f32 {
     match mode {
         "mirror" => {
             let x = t.rem_euclid(2.0 * duration);
-            if x > duration { 2.0 * duration - x } else { x }
+            if x > duration {
+                2.0 * duration - x
+            } else {
+                x
+            }
         }
         "single" => t.clamp(0.0, duration),
         _ => t.rem_euclid(duration),
@@ -2689,7 +3011,11 @@ impl PuppetGpu {
     /// Animated world matrix of a named attachment point, in the puppet's design units.
     fn attachment_at(&self, name: &str, time: f32) -> Option<Mat4> {
         let att = self.model.attachments.iter().find(|a| a.name == name)?;
-        let bone = self.pose_at(time).get(att.bone).copied().unwrap_or(mat::IDENTITY);
+        let bone = self
+            .pose_at(time)
+            .get(att.bone)
+            .copied()
+            .unwrap_or(mat::IDENTITY);
         let m = mat::mul(&att.matrix, &bone);
         // Row-vector rows laid end to end are the column-major array the engine uses.
         let mut out = [0.0f32; 16];
@@ -2717,7 +3043,8 @@ impl PuppetGpu {
                 let Some(track) = anim.tracks.iter().find(|t| t.bone == i) else {
                     continue;
                 };
-                let frame = anim_seconds(&anim.flag, time * rate, anim.duration_seconds()) * anim.fps;
+                let frame =
+                    anim_seconds(&anim.flag, time * rate, anim.duration_seconds()) * anim.fps;
                 let sample = track.sample(frame);
                 if additive {
                     for k in 0..3 {
@@ -2759,7 +3086,11 @@ mod tests {
         // ... and pillarboxed on a portrait target.
         assert!(leaves_gaps((0.0, 656.25, 1080.0, 607.5), 1080.0, 1920.0));
         // Zoomed in or panned past the edges: covered, unless the pan opens a gap.
-        assert!(!leaves_gaps((-100.0, -50.0, 2120.0, 1180.0), 1920.0, 1080.0));
+        assert!(!leaves_gaps(
+            (-100.0, -50.0, 2120.0, 1180.0),
+            1920.0,
+            1080.0
+        ));
         assert!(leaves_gaps((100.0, -50.0, 2120.0, 1180.0), 1920.0, 1080.0));
     }
 
@@ -2770,7 +3101,10 @@ mod tests {
         let mut moved = false;
         for i in 0..200 {
             let o = camera_shake([0.5, 1.0, 3.0], i as f32 * 0.1, size);
-            assert!(o[0].abs() <= 0.5 * 0.01 * 1920.0 * 1.2 && o[1].abs() <= 0.5 * 0.01 * 1920.0 * 1.2, "{o:?}");
+            assert!(
+                o[0].abs() <= 0.5 * 0.01 * 1920.0 * 1.2 && o[1].abs() <= 0.5 * 0.01 * 1920.0 * 1.2,
+                "{o:?}"
+            );
             moved |= o[0] != 0.0;
         }
         assert!(moved);
@@ -2804,18 +3138,29 @@ mod tests {
 
     #[test]
     fn parallax_moves_layers_against_the_pointer_within_the_margin() {
-        let p = scene::ParallaxNow { amount: 0.5, delay: 0.1, mouse_influence: 1.0 };
+        let p = scene::ParallaxNow {
+            amount: 0.5,
+            delay: 0.1,
+            mouse_influence: 1.0,
+        };
         let (w, margin) = (1920.0, [54.4, 30.6]);
         // Centred pointer: nothing moves.
         assert_eq!(camera_shift(&p, [0.5, 0.5], w), [0.0, 0.0]);
         // Pointer at the right edge: against it, by 0.5 * amount * width.
         let shift = camera_shift(&p, [1.0, 0.5], w);
-        assert!((shift[0] + 480.0).abs() < 1e-3 && shift[1] == 0.0, "{shift:?}");
+        assert!(
+            (shift[0] + 480.0).abs() < 1e-3 && shift[1] == 0.0,
+            "{shift:?}"
+        );
         // A layer's offset is depth times that, kept inside the margin; depth 0 stays fixed.
         assert_eq!(parallax_offset([0.0, 0.0], shift, margin), [0.0, 0.0]);
         assert!((parallax_offset([1.0, 1.0], shift, margin)[0] + 54.4).abs() < 1e-3);
         // A weak scene (0.1 x -0.1, like a scene that barely moves) is small and reversed.
-        let weak = scene::ParallaxNow { amount: 0.1, delay: 1.1, mouse_influence: -0.1 };
+        let weak = scene::ParallaxNow {
+            amount: 0.1,
+            delay: 1.1,
+            mouse_influence: -0.1,
+        };
         let s = camera_shift(&weak, [1.0, 0.5], w);
         assert!((s[0] - 9.6).abs() < 1e-3, "{s:?}");
         assert!((parallax_offset([1.2, 1.2], s, margin)[0] - 11.52).abs() < 1e-3);
@@ -2826,8 +3171,14 @@ mod tests {
         // Quad spanning clip x 0..2: its left half shows.
         let m = mul(&translate(1.0, 0.0, 0.0), &scale(2.0, 2.0, 1.0));
         let uv = visible_uv(&m, 1.0);
-        assert!((uv[0] - 0.0).abs() < 1e-5 && (uv[2] - 0.5).abs() < 1e-5, "{uv:?}");
-        assert!((uv[1] - 0.0).abs() < 1e-5 && (uv[3] - 1.0).abs() < 1e-5, "{uv:?}");
+        assert!(
+            (uv[0] - 0.0).abs() < 1e-5 && (uv[2] - 0.5).abs() < 1e-5,
+            "{uv:?}"
+        );
+        assert!(
+            (uv[1] - 0.0).abs() < 1e-5 && (uv[3] - 1.0).abs() < 1e-5,
+            "{uv:?}"
+        );
         assert_eq!(visible_uv(&FBO_MVP, 1.0), [0.0, 0.0, 1.0, 1.0]);
     }
 

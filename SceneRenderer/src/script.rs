@@ -19,10 +19,27 @@ const MODULES: [(&str, &str, &[&str]); 3] = [
     (
         "WEMath",
         "__WEMath",
-        &["PI", "deg2rad", "rad2deg", "clamp", "mix", "lerp", "smoothStep", "fract"],
+        &[
+            "PI",
+            "deg2rad",
+            "rad2deg",
+            "clamp",
+            "mix",
+            "lerp",
+            "smoothStep",
+            "fract",
+        ],
     ),
-    ("WEVector", "__WEVector", &["Vec2", "Vec3", "Vec4", "angleVector2", "vectorAngle2"]),
-    ("WEColor", "__WEColor", &["rgb2hsv", "hsv2rgb", "normalizeColor", "expandColor"]),
+    (
+        "WEVector",
+        "__WEVector",
+        &["Vec2", "Vec3", "Vec4", "angleVector2", "vectorAngle2"],
+    ),
+    (
+        "WEColor",
+        "__WEColor",
+        &["rgb2hsv", "hsv2rgb", "normalizeColor", "expandColor"],
+    ),
 ];
 
 /// A layer a script created with `thisScene.createLayer`.
@@ -82,11 +99,21 @@ impl Events {
             .flatten()
             .filter_map(|m| Some((m["id"].as_i64()?, m["index"].as_u64()? as usize)))
             .collect();
-        Self { values, dirty, scene, created, moves }
+        Self {
+            values,
+            dirty,
+            scene,
+            created,
+            moves,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty() && self.dirty.is_empty() && self.scene.is_empty() && self.created.is_empty() && self.moves.is_empty()
+        self.values.is_empty()
+            && self.dirty.is_empty()
+            && self.scene.is_empty()
+            && self.created.is_empty()
+            && self.moves.is_empty()
     }
 }
 
@@ -107,6 +134,8 @@ pub struct FrameState {
     /// Audio spectrum, 0..1 per band, any band count.
     pub left: Vec<f32>,
     pub right: Vec<f32>,
+    /// Video textures this frame: (layer id, playhead seconds, playing).
+    pub videos: Vec<(i64, f64, bool)>,
 }
 
 pub struct Host {
@@ -119,7 +148,9 @@ pub struct Host {
 
 impl std::fmt::Debug for Host {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Host").field("scripts", &self.count).finish()
+        f.debug_struct("Host")
+            .field("scripts", &self.count)
+            .finish()
     }
 }
 
@@ -161,7 +192,12 @@ impl Host {
             ctx.eval::<(), _>(PRELUDE).catch(&ctx).map_err(js)?;
             Ok(())
         })?;
-        Ok(Self { ctx, _rt: rt, log, count: 0 })
+        Ok(Self {
+            ctx,
+            _rt: rt,
+            log,
+            count: 0,
+        })
     }
 
     /// Replaces the scripts' view of the scene's layers (draw order, current values).
@@ -182,12 +218,21 @@ impl Host {
         value: &Value,
     ) -> Result<Events, Error> {
         self.count += 1;
-        let props = if properties.is_object() { properties.to_string() } else { "{}".into() };
+        let props = if properties.is_object() {
+            properties.to_string()
+        } else {
+            "{}".into()
+        };
         let out = self.ctx.with(|ctx| -> Result<String, Error> {
             let begin: Function = ctx.globals().get("__lw_begin").map_err(js)?;
-            begin.call::<_, ()>((layer_id, props)).catch(&ctx).map_err(js)?;
+            begin
+                .call::<_, ()>((layer_id, props))
+                .catch(&ctx)
+                .map_err(js)?;
             let name = format!("layer{layer_id}/{field}");
-            let module = Module::declare(ctx.clone(), name, source).catch(&ctx).map_err(js)?;
+            let module = Module::declare(ctx.clone(), name, source)
+                .catch(&ctx)
+                .map_err(js)?;
             let (module, done) = module.eval().catch(&ctx).map_err(js)?;
             done.finish::<()>().catch(&ctx).map_err(js)?;
             let ns: Object = module.namespace().catch(&ctx).map_err(js)?;
@@ -202,6 +247,11 @@ impl Host {
 
     /// Runs every script's `update` for one frame.
     pub fn frame(&mut self, s: &FrameState) -> Result<Events, Error> {
+        let videos: Map<String, Value> = s
+            .videos
+            .iter()
+            .map(|(id, time, playing)| (id.to_string(), serde_json::json!([time, playing])))
+            .collect();
         let input = serde_json::json!({
             "time": s.time,
             "dt": s.frame_time,
@@ -213,6 +263,7 @@ impl Host {
             "down": s.cursor_down,
             "left": s.left,
             "right": s.right,
+            "videos": videos,
         });
         let out = self.call("__lw_frame", input.to_string())?;
         Ok(Events::parse(&out))
@@ -248,9 +299,11 @@ mod tests {
 
     fn host_with_layer() -> Host {
         let mut h = Host::new().expect("runtime");
-        h.set_layers(&json!([{ "id": 7, "name": "clock", "origin": "10 20 0", "scale": "1 1 1",
-            "angles": "0 0 0", "color": "1 1 1", "alpha": 1.0, "visible": true, "text": "" }]))
-            .expect("layers");
+        h.set_layers(
+            &json!([{ "id": 7, "name": "clock", "origin": "10 20 0", "scale": "1 1 1",
+            "angles": "0 0 0", "color": "1 1 1", "alpha": 1.0, "visible": true, "text": "" }]),
+        )
+        .expect("layers");
         h
     }
 
@@ -266,6 +319,7 @@ mod tests {
             cursor_down: false,
             left: vec![1.0; 64],
             right: vec![0.0; 64],
+            videos: vec![],
         })
         .expect("frame")
     }
@@ -277,7 +331,9 @@ mod tests {
             export var scriptProperties = createScriptProperties()\n\
               .addText({ name: 'delimiter', value: ':' }).finish();\n\
             export function update(value) { return 'a' + scriptProperties.delimiter + 'b'; }";
-        let e = h.add(0, 7, "text", src, &json!({ "delimiter": "-" }), &json!("x")).expect("add");
+        let e = h
+            .add(0, 7, "text", src, &json!({ "delimiter": "-" }), &json!("x"))
+            .expect("add");
         assert_eq!(e.values, vec![(0, json!("x"))]);
         let e = frame(&mut h, 1.0);
         assert_eq!(e.values, vec![(0, json!("a-b"))]);
@@ -287,7 +343,9 @@ mod tests {
     fn scene_settings_written_by_scripts_are_reported() {
         let mut h = host_with_layer();
         let src = "export function init() { thisScene.bloomstrength = 3; thisScene.clearcolor = '0.1 0.2 0.3'; }";
-        let e = h.add(0, 7, "alpha", src, &Value::Null, &json!(1)).expect("add");
+        let e = h
+            .add(0, 7, "alpha", src, &Value::Null, &json!(1))
+            .expect("add");
         assert_eq!(e.scene.get("bloomstrength"), Some(&json!(3)));
         assert_eq!(e.scene.get("clearcolor"), Some(&json!("0.1 0.2 0.3")));
     }
@@ -296,7 +354,9 @@ mod tests {
     fn a_vector_value_round_trips_as_text() {
         let mut h = host_with_layer();
         let src = "export function update(value) { return value.multiply(2); }";
-        let _ = h.add(0, 7, "scale", src, &Value::Null, &json!("1 2 3")).expect("add");
+        let _ = h
+            .add(0, 7, "scale", src, &Value::Null, &json!("1 2 3"))
+            .expect("add");
         let e = frame(&mut h, 1.0);
         assert_eq!(e.values, vec![(0, json!("2 4 6"))]);
     }
@@ -308,14 +368,23 @@ mod tests {
             export function init() { bar = thisScene.createLayer('models/bar.json');\n\
               thisScene.sortLayer(bar, 0); }\n\
             export function update() { thisLayer.origin = new Vec3(1, 2, 3); bar.alpha = 0.5; }";
-        let e = h.add(0, 7, "visible", src, &Value::Null, &json!(true)).expect("add");
+        let e = h
+            .add(0, 7, "visible", src, &Value::Null, &json!(true))
+            .expect("add");
         assert_eq!(e.created.len(), 1);
         assert_eq!(e.created[0].path, "models/bar.json");
         assert_eq!(e.moves, vec![(e.created[0].id, 0)]);
         let e = frame(&mut h, 1.0);
-        let origin = e.dirty.iter().find(|(id, _)| *id == 7).map(|(_, d)| d["origin"].clone());
+        let origin = e
+            .dirty
+            .iter()
+            .find(|(id, _)| *id == 7)
+            .map(|(_, d)| d["origin"].clone());
         assert_eq!(origin, Some(json!("1 2 3")));
-        assert!(e.dirty.iter().any(|(_, d)| d.get("alpha") == Some(&json!(0.5))));
+        assert!(e
+            .dirty
+            .iter()
+            .any(|(_, d)| d.get("alpha") == Some(&json!(0.5))));
         assert!(e.values.is_empty());
     }
 
@@ -324,7 +393,9 @@ mod tests {
         let mut h = host_with_layer();
         let src = "const a = engine.registerAudioBuffers(engine.AUDIO_RESOLUTION_16);\n\
             export function update() { return a.left[3] + a.average[3]; }";
-        let _ = h.add(0, 7, "alpha", src, &Value::Null, &json!(0)).expect("add");
+        let _ = h
+            .add(0, 7, "alpha", src, &Value::Null, &json!(0))
+            .expect("add");
         let e = frame(&mut h, 1.0);
         assert_eq!(e.values, vec![(0, json!(1.5))]);
     }
@@ -333,7 +404,9 @@ mod tests {
     fn a_throwing_script_is_disabled_and_logged() {
         let mut h = host_with_layer();
         let src = "export function update() { throw new Error('boom'); }";
-        let _ = h.add(0, 7, "alpha", src, &Value::Null, &json!(1)).expect("add");
+        let _ = h
+            .add(0, 7, "alpha", src, &Value::Null, &json!(1))
+            .expect("add");
         let _ = frame(&mut h, 1.0);
         assert!(h.take_log().iter().any(|l| l.contains("boom")));
         assert!(!h.animated());
@@ -346,7 +419,9 @@ mod tests {
             export function cursorDown(e) { drag = true; off = thisLayer.origin.subtract(e.worldPosition); }\n\
             export function cursorUp(e) { drag = false; }\n\
             export function cursorMove(e) { if (drag) thisLayer.origin = e.worldPosition.add(off); }";
-        let _ = h.add(0, 7, "origin", src, &Value::Null, &json!("10 20 0")).expect("add");
+        let _ = h
+            .add(0, 7, "origin", src, &Value::Null, &json!("10 20 0"))
+            .expect("add");
         let at = |h: &mut Host, x: f32, y: f32, down: bool| {
             h.frame(&FrameState {
                 time: 1.0,
@@ -359,6 +434,7 @@ mod tests {
                 cursor_down: down,
                 left: vec![],
                 right: vec![],
+                videos: vec![],
             })
             .expect("frame")
         };
@@ -369,7 +445,11 @@ mod tests {
         // Press on it, drag by (5, 5), release.
         let _ = at(&mut h, 10.0, 20.0, true);
         let e = at(&mut h, 15.0, 25.0, true);
-        let origin = e.dirty.iter().find(|(id, _)| *id == 7).map(|(_, d)| d["origin"].clone());
+        let origin = e
+            .dirty
+            .iter()
+            .find(|(id, _)| *id == 7)
+            .map(|(_, d)| d["origin"].clone());
         assert_eq!(origin, Some(json!("15 25 0")), "{:?}", h.take_log());
         let _ = at(&mut h, 15.0, 25.0, false);
         let e = at(&mut h, 99.0, 99.0, false);
@@ -381,7 +461,9 @@ mod tests {
         let mut h = host_with_layer();
         let src = "import * as WEMath from 'WEMath';\n\
             export function update() { return WEMath.clamp(5, 0, 1); }";
-        let _ = h.add(0, 7, "alpha", src, &Value::Null, &json!(0)).expect("add");
+        let _ = h
+            .add(0, 7, "alpha", src, &Value::Null, &json!(0))
+            .expect("add");
         let e = frame(&mut h, 1.0);
         assert_eq!(e.values, vec![(0, json!(1))], "{:?}", h.take_log());
     }

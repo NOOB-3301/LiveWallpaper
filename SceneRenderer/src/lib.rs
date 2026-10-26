@@ -15,6 +15,7 @@ pub mod sound;
 pub mod tex;
 pub mod text;
 pub mod vfs;
+pub mod video;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]

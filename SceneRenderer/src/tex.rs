@@ -82,6 +82,8 @@ pub struct Tex {
     /// Mip chains, one per image. Sprite sheets may have several images.
     pub images: Vec<Vec<Mip>>,
     pub frames: Vec<Frame>,
+    /// A video texture: the movie file bytes (mp4) instead of images.
+    pub video: Option<Vec<u8>>,
 }
 
 pub fn decode(data: &[u8]) -> Result<Tex, Error> {
@@ -123,9 +125,9 @@ pub fn decode(data: &[u8]) -> Result<Tex, Error> {
     if version >= 4 {
         mp4 = r.i32()?;
     }
-    if flags & 32 != 0 || image_format == 35 || (version >= 4 && mp4 == 1 && image_format == -1) {
-        return Err(Error::Unsupported("video textures".into()));
-    }
+    // The three signatures of a video texture: its one "mip" holds a movie file.
+    let video =
+        flags & 32 != 0 || image_format == 35 || (version >= 4 && mp4 == 1 && image_format == -1);
 
     let mut format = Format::from_raw(format_raw);
     let mut images = Vec::with_capacity(image_count);
@@ -161,6 +163,27 @@ pub fn decode(data: &[u8]) -> Result<Tex, Error> {
         images.push(mips);
     }
 
+    // A video: the first mip is the movie file, and nothing else follows that concerns us.
+    if video {
+        let file = images
+            .first()
+            .and_then(|m| m.first())
+            .map(|m| m.data.clone())
+            .unwrap_or_default();
+        return Ok(Tex {
+            texture_width: dims[0],
+            texture_height: dims[1],
+            image_width: dims[2].min(dims[0]),
+            image_height: dims[3].min(dims[1]),
+            format: Format::Rgba8,
+            clamp: flags & 2 != 0,
+            nearest: flags & 1 != 0,
+            images: Vec::new(),
+            frames: Vec::new(),
+            video: Some(file),
+        });
+    }
+
     // Embedded PNG/JPEG: decode the first mip of each image to RGBA; the GPU builds no extra mips.
     if image_format >= 0 {
         for mips in &mut images {
@@ -189,8 +212,10 @@ pub fn decode(data: &[u8]) -> Result<Tex, Error> {
     };
     // The header may name a padded size (4096x4096) while the stored mip is only the image
     // (3840x2160); uvs are fractions of what the GPU actually holds, so trust the mip.
-    let (texture_width, texture_height) =
-        images.first().and_then(|m| m.first()).map_or((dims[0], dims[1]), |m| (m.width, m.height));
+    let (texture_width, texture_height) = images
+        .first()
+        .and_then(|m| m.first())
+        .map_or((dims[0], dims[1]), |m| (m.width, m.height));
     Ok(Tex {
         texture_width,
         texture_height,
@@ -201,6 +226,7 @@ pub fn decode(data: &[u8]) -> Result<Tex, Error> {
         nearest: flags & 1 != 0,
         images,
         frames,
+        video: None,
     })
 }
 
@@ -334,5 +360,23 @@ mod tests {
     #[test]
     fn lz4_rejects_bad_offset() {
         assert!(lz4_block(&[0x10, b'a', 9, 0], 8).is_err());
+    }
+
+    #[test]
+    fn a_video_tex_yields_the_movie_file() {
+        // TEXB0004 with flag 32 set: one "mip" holding a fake movie file.
+        let mut f = b"TEXV0005\0TEXI0001\0".to_vec();
+        for v in [0i32, 32, 3840, 2160, 3840, 2160, 0] {
+            f.extend(v.to_le_bytes());
+        }
+        f.extend(b"TEXB0004\0");
+        for v in [1u32, 0xffff_ffffu32, 0, 1, 3840, 2160, 0, 0, 8] {
+            f.extend(v.to_le_bytes());
+        }
+        f.extend(*b"12345678");
+        let t = decode(&f).unwrap();
+        assert!(t.images.is_empty());
+        assert_eq!(t.video.as_deref(), Some(&b"12345678"[..]));
+        assert_eq!((t.texture_width, t.texture_height), (3840, 2160));
     }
 }

@@ -263,8 +263,48 @@ impl Gpu {
                 data: rgba.to_vec(),
             }]],
             frames: Vec::new(),
+            video: None,
         };
         self.upload(&tex, 0, false)
+    }
+
+    /// A BGRA texture a video's decoded frames are uploaded into, one per shown frame.
+    pub fn video_texture(&self, w: u32, h: u32) -> Result<Retained<Texture>, Error> {
+        // SAFETY: plain descriptor construction with in-range sizes.
+        let desc = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                w.max(1) as usize,
+                h.max(1) as usize,
+                false,
+            )
+        };
+        desc.setUsage(MTLTextureUsage::ShaderRead);
+        self.device
+            .newTextureWithDescriptor(&desc)
+            .ok_or_else(|| Error::Metal("video texture alloc".into()))
+    }
+
+    /// Fills a texture with transparent black, row by row, so an undecoded video frame shows
+    /// nothing rather than whatever the allocator left behind.
+    pub fn clear_texture(&self, texture: &Texture) {
+        let row = texture.width() * 4;
+        let zeros = vec![0u8; row];
+        let Some(ptr) = NonNull::new(zeros.as_ptr() as *mut c_void) else {
+            return;
+        };
+        for y in 0..texture.height() {
+            let region = MTLRegion {
+                origin: MTLOrigin { x: 0, y, z: 0 },
+                size: MTLSize {
+                    width: texture.width(),
+                    height: 1,
+                    depth: 1,
+                },
+            };
+            // SAFETY: `zeros` holds `width * 4` bytes, one row of the region.
+            unsafe { texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row) };
+        }
     }
 
     pub fn render_target(
@@ -357,7 +397,11 @@ impl Gpu {
     }
 
     /// Pipeline for a blur-library pass (`lw_blur_fs` or `lw_bright_fs`), without blending.
-    pub fn blur_pipeline(&mut self, fragment: &'static str, samples: usize) -> Result<Retained<Pipeline>, Error> {
+    pub fn blur_pipeline(
+        &mut self,
+        fragment: &'static str,
+        samples: usize,
+    ) -> Result<Retained<Pipeline>, Error> {
         if let Some(p) = self.blur.get(&(fragment, samples)) {
             return Ok(p.clone());
         }
@@ -376,7 +420,15 @@ impl Gpu {
                 attr.setBufferIndex(VERTEX_BUFFER_SLOT as usize);
             }
         }
-        let p = self.finish_pipeline(&vs, &fs, &vd, Blend::Normal, FBO_FORMAT, samples, VERTEX_STRIDE)?;
+        let p = self.finish_pipeline(
+            &vs,
+            &fs,
+            &vd,
+            Blend::Normal,
+            FBO_FORMAT,
+            samples,
+            VERTEX_STRIDE,
+        )?;
         let _ = self.blur.insert((fragment, samples), p.clone());
         Ok(p)
     }

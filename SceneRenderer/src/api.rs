@@ -91,7 +91,10 @@ struct Pointer {
 
 impl Default for Pointer {
     fn default() -> Self {
-        Self { pos: [0.5, 0.5], down: false }
+        Self {
+            pos: [0.5, 0.5],
+            down: false,
+        }
     }
 }
 
@@ -371,7 +374,12 @@ struct Target {
     size: (u32, u32),
 }
 
-fn run(engine: Engine, rx: Receiver<Command>, counters: Arc<Counters>, pointer: Arc<Mutex<Pointer>>) {
+fn run(
+    engine: Engine,
+    rx: Receiver<Command>,
+    counters: Arc<Counters>,
+    pointer: Arc<Mutex<Pointer>>,
+) {
     let animated = engine.is_animated();
     let mut s = Loop {
         engine,
@@ -396,7 +404,8 @@ fn run(engine: Engine, rx: Receiver<Command>, counters: Arc<Counters>, pointer: 
     loop {
         // While the button is held, scripts may be dragging something: keep drawing.
         let held = s.pointer.lock().is_ok_and(|p| p.down);
-        let drawing = s.playing && s.visible && !s.targets.is_empty() && (s.animated || s.dirty || held);
+        let drawing =
+            s.playing && s.visible && !s.targets.is_empty() && (s.animated || s.dirty || held);
         let cmd = if drawing {
             rx.recv_timeout(next.saturating_duration_since(Instant::now()))
         } else {
@@ -435,6 +444,7 @@ impl Loop {
             Command::Stop => {
                 self.playing = false;
                 self.time = 0.0;
+                self.engine.reset_videos();
                 self.engine.trim();
             }
             Command::Property(name, value) => {
@@ -570,7 +580,11 @@ impl Loop {
         let pointer = self.pointer.lock().map(|p| *p).unwrap_or_default();
         // Parallax follows the pointer with the scene's delay instead of jumping with it.
         let delay = self.engine.parallax_now().map_or(0.1, |p| p.delay);
-        let ease = if delay > 0.0 { (dt / delay).min(1.0) } else { 1.0 };
+        let ease = if delay > 0.0 {
+            (dt / delay).min(1.0)
+        } else {
+            1.0
+        };
         for i in 0..2 {
             self.parallax[i] += (pointer.pos[i] - self.parallax[i]) * ease;
         }
@@ -617,9 +631,11 @@ impl Loop {
             unsafe { cb.addCompletedHandler(block2::RcBlock::as_ptr(&done)) };
             let _ = self.counters.waiting.fetch_add(1, Ordering::Relaxed);
             let counters = self.counters.clone();
-            let shown = block2::RcBlock::new(move |_: std::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
-                let _ = counters.waiting.fetch_sub(1, Ordering::Relaxed);
-            });
+            let shown = block2::RcBlock::new(
+                move |_: std::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
+                    let _ = counters.waiting.fetch_sub(1, Ordering::Relaxed);
+                },
+            );
             // SAFETY: the block is retained by the drawable until it runs; it runs once, also
             // when the drawable is dropped without being shown.
             unsafe { drawables[0].addPresentedHandler(block2::RcBlock::as_ptr(&shown)) };
@@ -635,6 +651,8 @@ impl Loop {
             }
             cb.commit();
             self.dirty = false;
+            // Videos start and stop with their scripts, so the idle check follows them.
+            self.animated = self.engine.is_animated();
         });
     }
 
@@ -645,6 +663,8 @@ impl Loop {
         ));
         let (w, h) = (w.max(1) as usize, h.max(1) as usize);
         objc2::rc::autoreleasepool(|_| {
+            // Videos follow the recorder's clock, which jumps between calls.
+            self.engine.offscreen_videos(time);
             let gpu = &self.engine.gpu;
             // SAFETY: plain descriptor construction.
             let desc = unsafe {
