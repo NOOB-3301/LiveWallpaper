@@ -145,12 +145,13 @@ struct RootView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: $selection) {
+        let counts = assignmentCounts
+        return List(selection: $selection) {
             Section("Library") {
                 sidebarRow(.all, count: model.videos.count)
-                sidebarRow(.desktop, count: count(for: .desktop))
-                sidebarRow(.lockScreen, count: count(for: .lock))
-                sidebarRow(.scenes, count: model.videos.filter(\.isScene).count)
+                sidebarRow(.desktop, count: counts.desktop)
+                sidebarRow(.lockScreen, count: counts.lock)
+                sidebarRow(.scenes, count: counts.scenes)
                 sidebarRow(.playlists, count: nil)
             }
             Section("Discover") {
@@ -189,9 +190,18 @@ struct RootView: View {
         .tag(item)
     }
 
-    private func count(for target: WallpaperTarget) -> Int {
-        let state = model.snapshot
-        return model.videos.filter { !state.targets(of: $0.id).isEmpty && state.targets(of: $0.id).contains(target) }.count
+    /// All three library counts in one pass; the sidebar re-evaluates with the rest of the window.
+    private var assignmentCounts: (desktop: Int, lock: Int, scenes: Int) {
+        var desktop = 0
+        var lock = 0
+        var scenes = 0
+        for item in model.videos {
+            let targets = model.targets(of: item.id)
+            if targets.contains(.desktop) { desktop += 1 }
+            if targets.contains(.lock) { lock += 1 }
+            if item.isScene { scenes += 1 }
+        }
+        return (desktop, lock, scenes)
     }
 
     // MARK: Detail
@@ -283,10 +293,8 @@ struct RootView: View {
     }
 
     private var focusedLibraryItem: VideoItem? {
-        let state = model.snapshot
-        let visible = model.videos.filter {
-            selection.libraryFilter.includes($0, targets: state.targets(of: $0.id))
-        }
+        let filter = selection.libraryFilter
+        let visible = model.videos.filter { filter.includes($0, targets: model.targets(of: $0.id)) }
         return visible.first { $0.id == model.focusedID } ?? visible.first
     }
 

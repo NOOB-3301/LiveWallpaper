@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import Core
 
 // The shared visual language for the Settings app. Keep every custom colour, radius, curve and
@@ -29,25 +30,74 @@ enum LWTheme {
             .init(color: .black.opacity(0.10), location: 1),
         ],
         startPoint: .top, endPoint: .bottom)
+
+    /// The content surface. At 88% the ambient field reads through a card without the card becoming a live
+    /// backdrop sample; Reduce Transparency flattens it to the solid control colour, like `GlassPanel`.
+    static let surfaceCard = Color(nsColor: NSColor(name: NSColor.Name("LWSurfaceCard")) { _ in
+        let base = NSColor.controlBackgroundColor
+        return NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+            ? base : base.withAlphaComponent(0.88)
+    })
+
+    static let washCool = ambientWash(hue: 212, saturation: 0.55, darkBrightness: 0.45, lightBrightness: 0.55)
+    static let washWarm = ambientWash(hue: 265, saturation: 0.42, darkBrightness: 0.50, lightBrightness: 0.60)
+
+    /// The light-catching top edge every raised surface shares. White over the fill, so it never changes
+    /// the fill's contrast with the text on it.
+    static let topSheen = LinearGradient(colors: [.white.opacity(0.16), .clear],
+                                        startPoint: .top, endPoint: .center)
+
+    /// The one accent gradient. Reserved for the drop-target border — never under text, never a hairline,
+    /// never a card fill: a translucent accent behind white glyph text fails contrast in light mode.
+    static let accentFlow = LinearGradient(colors: [Color.accentColor.opacity(0.9), Color.accentColor.opacity(0.45)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+
+    /// At 5-13% alpha over the window colour this is a hint of colour, not a wash you look at. Light mode
+    /// sits lower so `Color.primary` text keeps its contrast.
+    private static func ambientWash(hue: CGFloat, saturation: CGFloat,
+                                    darkBrightness: CGFloat, lightBrightness: CGFloat) -> Color {
+        let name = NSColor.Name("LWWash\(Int(hue))")
+        return Color(nsColor: NSColor(name: name) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return NSColor(hue: hue / 360, saturation: saturation,
+                           brightness: dark ? darkBrightness : lightBrightness,
+                           alpha: dark ? 0.13 : 0.05)
+        })
+    }
 }
 
 enum LWMotion {
-    static let hover = Animation.easeOut(duration: 0.16)
+    static let hover = Animation.spring(response: 0.18, dampingFraction: 0.90)
     static let select = Animation.spring(response: 0.28, dampingFraction: 0.86)
-    static let hero = Animation.spring(response: 0.42, dampingFraction: 0.88)
-    static let panel = Animation.easeInOut(duration: 0.26)
+    static let panel = Animation.spring(response: 0.34, dampingFraction: 0.82)
     static let content = Animation.easeInOut(duration: 0.22)
     static let success = Animation.spring(response: 0.36, dampingFraction: 0.72)
 }
 
 // MARK: - Ambient background
 
-/// The page background every content area sits on. Deliberately plain: the window colour and nothing else.
-/// The depth in this app comes from the glass surfaces and their hairlines, not from colour washes.
+/// The field every page sits on: the window colour plus two fixed, still washes. Blur is baked into the
+/// gradient stops — no `.blur` and no `NSVisualEffectView`, which would sample the live backdrop and
+/// re-rasterise on every scroll frame. Sits behind the scroller, so scrolling is a transform over a cached layer.
 struct LWBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     var body: some View {
         Color(nsColor: .windowBackgroundColor)
+            .overlay {
+                if !reduceTransparency {
+                    LWTheme.washCool.ambientWash(from: UnitPoint(x: 0.15, y: 0.08))
+                    LWTheme.washWarm.ambientWash(from: UnitPoint(x: 0.88, y: 0.95))
+                }
+            }
             .ignoresSafeArea()
+    }
+}
+
+private extension Color {
+    func ambientWash(from center: UnitPoint) -> some View {
+        EllipticalGradient(gradient: Gradient(colors: [self, self.opacity(0)]),
+                           center: center, startRadiusFraction: 0, endRadiusFraction: 0.9)
     }
 }
 
@@ -69,16 +119,14 @@ struct LWCard<Content: View>: View {
     }
 }
 
-/// One glass shape used by cards, banners and rows: material fill, top sheen, gradient hairline, shadow.
+/// One surface shape used by cards, banners and rows: tinted fill, top sheen, gradient hairline, shadow.
 @ViewBuilder
 func glassShape(radius: CGFloat, cornerStyle: RoundedCornerStyle = .continuous,
-                fill: some ShapeStyle = AnyShapeStyle(.regularMaterial)) -> some View {
+                fill: some ShapeStyle = AnyShapeStyle(LWTheme.surfaceCard)) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: cornerStyle)
     ZStack {
         shape.fill(fill)
-        LinearGradient(colors: [.white.opacity(0.16), .clear],
-                       startPoint: .top, endPoint: .center)
-            .clipShape(shape)
+        LWTheme.topSheen.clipShape(shape)
     }
     .overlay(shape.strokeBorder(LWTheme.edgeGradient, lineWidth: 1))
     .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
@@ -197,6 +245,7 @@ struct LWChip: View {
         .background {
             if selected {
                 Capsule().fill(Color.accentColor)
+                    .overlay(Capsule().fill(LWTheme.topSheen))
             } else {
                 Capsule().fill(filled ? color : color.opacity(0.13))
             }
@@ -225,6 +274,7 @@ struct LWTopicChip: View {
                 .background {
                     if selected {
                         Capsule().fill(Color.accentColor)
+                            .overlay(Capsule().fill(LWTheme.topSheen))
                     } else {
                         Capsule()
                             .fill(.regularMaterial)
@@ -259,7 +309,7 @@ struct StatusDot: View {
             }
             .animation(pulsing ? .easeOut(duration: 1.2).repeatForever(autoreverses: false) : .default, value: on)
             .onAppear { on = pulsing }
-            .onChange(of: pulsing) { on = $0 }
+            .onChange(of: pulsing) { _, isOn in on = isOn }
     }
 }
 
@@ -393,71 +443,97 @@ struct LWSearchField: View {
 // MARK: - View helpers
 
 extension View {
-    func hoverLift(_ enabled: Bool = true) -> some View {
-        modifier(HoverLiftModifier(enabled: enabled))
-    }
-
-    /// The inspector on macOS 14+, a trailing panel on older systems. Keeps the app on its macOS 13 floor.
+    /// The standard trailing inspector.
     @ViewBuilder
     func lwInspector<Inspector: View>(isPresented: Binding<Bool>,
                                       @ViewBuilder inspector: @escaping () -> Inspector) -> some View {
-        if #available(macOS 14.0, *) {
-            self.inspector(isPresented: isPresented) {
-                inspector()
-                    .inspectorColumnWidth(min: 280, ideal: LWTheme.inspectorWidth, max: 380)
-            }
-        } else {
-            HStack(spacing: 0) {
-                self
-                if isPresented.wrappedValue {
-                    Divider()
-                    inspector().frame(width: LWTheme.inspectorWidth)
-                }
-            }
+        self.inspector(isPresented: isPresented) {
+            inspector()
+                .inspectorColumnWidth(min: 280, ideal: LWTheme.inspectorWidth, max: 380)
         }
+    }
+
+    /// Cells dim and settle as they cross the viewport edge, tracking the fling. A no-op under Reduce Motion.
+    func lwScrollEntry() -> some View {
+        modifier(LWScrollEntry())
     }
 }
 
-private struct HoverLiftModifier: ViewModifier {
-    let enabled: Bool
-    @State private var hovering = false
+private struct LWScrollEntry: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content
-            .scaleEffect(enabled && hovering && !reduceMotion ? 1.015 : 1)
-            .shadow(color: .black.opacity(hovering && enabled ? 0.22 : 0), radius: hovering ? 16 : 0, y: hovering ? 8 : 0)
-            .animation(LWMotion.hover, value: hovering)
-            .onHover { hovering = $0 }
+        if reduceMotion {
+            content
+        } else {
+            content.scrollTransition(.interactive) { view, phase in
+                view.opacity(phase.isIdentity ? 1 : 0.8)
+                    .scaleEffect(phase.isIdentity ? 1 : 0.985)
+            }
+        }
     }
 }
 
 // MARK: - Thumbnails
 
-/// Shared thumbnail loading. Decodes once, keeps the result, and never does disk work in `body`.
+/// Shared thumbnail loading. Decodes downsampled off the main actor, keeps the result, and answers a
+/// synchronous hit so a recycled cell can be seeded before its `.task` runs.
 @MainActor
 final class ThumbnailCache {
     static let shared = ThumbnailCache()
-    private let cache = NSCache<NSString, NSImage>()
 
-    func image(for item: VideoItem) async -> NSImage? {
-        let key = (item.previewPath ?? item.path) as NSString
-        if let cached = cache.object(forKey: key) { return cached }
+    private let cache = NSCache<NSString, ThumbnailEntry>()
+    private var inFlight: [NSString: Task<CGImage?, Never>] = [:]
 
-        let image: NSImage?
-        if let preview = item.previewPath, let loaded = NSImage(contentsOfFile: preview) {
-            image = loaded
-        } else if !item.isScene,
-                  let cgImage = await VideoStills.cgImage(for: item.url,
-                                                          maxPixelSize: CGSize(width: 640, height: 360)) {
-            image = NSImage(cgImage: cgImage, size: .zero)
-        } else {
-            image = nil
-        }
-
-        if let image { cache.setObject(image, forKey: key) }
-        return image
+    init() {
+        cache.countLimit = 500
+        cache.totalCostLimit = 64 * 1024 * 1024
     }
+
+    func cached(_ item: VideoItem, _ size: ThumbnailSize) -> CGImage? {
+        cache.object(forKey: key(item, size))?.image
+    }
+
+    func image(for item: VideoItem, _ size: ThumbnailSize) async -> CGImage? {
+        let name = key(item, size)
+        if let hit = cache.object(forKey: name)?.image { return hit }
+        if let pending = inFlight[name] { return await pending.value }
+
+        let previewPath = item.previewPath
+        let url = item.url
+        let wantsVideoStill = !item.isScene
+        let pixel = size.rawValue
+        let task = Task<CGImage?, Never>.detached(priority: .userInitiated) {
+            if let previewPath, let still = StillDownsampler.image(atPath: previewPath, maxPixel: pixel) {
+                return still
+            }
+            guard wantsVideoStill else { return nil }
+            return await VideoStills.cgImage(for: url, maxPixelSize: CGSize(width: pixel, height: pixel))
+        }
+        inFlight[name] = task
+        let decoded = await task.value
+        inFlight[name] = nil
+        if let decoded {
+            cache.setObject(ThumbnailEntry(decoded), forKey: name, cost: decoded.bytesPerRow * decoded.height)
+        }
+        return decoded
+    }
+
+    /// A re-download writes new bytes into the same library folder, so the replaced record's entries are stale.
+    func invalidate(_ item: VideoItem) {
+        for size in [ThumbnailSize.row, .card] {
+            cache.removeObject(forKey: key(item, size))
+        }
+    }
+
+    private func key(_ item: VideoItem, _ size: ThumbnailSize) -> NSString {
+        "\(item.previewPath ?? item.path)|\(size.rawValue)" as NSString
+    }
+}
+
+private final class ThumbnailEntry: NSObject {
+    let image: CGImage
+    init(_ image: CGImage) { self.image = image }
 }
 
 struct ItemThumbnail: View {
@@ -465,12 +541,23 @@ struct ItemThumbnail: View {
     var broken = false
     var showsHoverPreview = true
     var cornerRadius: CGFloat = 12
+    var size: ThumbnailSize = .card
 
-    @State private var image: NSImage?
+    @State private var image: CGImage?
     @State private var hovering = false
     @State private var previewVisible = false
     @State private var previewTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(item: VideoItem, broken: Bool = false, showsHoverPreview: Bool = true,
+         cornerRadius: CGFloat = 12, size: ThumbnailSize = .card) {
+        self.item = item
+        self.broken = broken
+        self.showsHoverPreview = showsHoverPreview
+        self.cornerRadius = cornerRadius
+        self.size = size
+        _image = State(initialValue: ThumbnailCache.shared.cached(item, size))
+    }
 
     var body: some View {
         ZStack {
@@ -484,10 +571,9 @@ struct ItemThumbnail: View {
                 }
                 .foregroundStyle(.orange)
             } else if let image {
-                Image(nsImage: image)
+                Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFill()
-                    .transition(.opacity)
             } else {
                 Image(systemName: item.isScene ? "photo" : "film")
                     .font(.system(size: 20))
@@ -501,9 +587,8 @@ struct ItemThumbnail: View {
         }
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .task(id: [item.path, item.previewPath ?? ""]) {
-            let loaded = await ThumbnailCache.shared.image(for: item)
-            withAnimation(.easeInOut(duration: 0.2)) { image = loaded }
+        .task(id: "\(item.previewPath ?? item.path)|\(size.rawValue)") {
+            if let loaded = await ThumbnailCache.shared.image(for: item, size) { image = loaded }
         }
         .onHover(perform: hoverChanged)
         .onDisappear {
@@ -521,16 +606,45 @@ struct ItemThumbnail: View {
             return
         }
         previewTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 320_000_000)
+            try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled, hovering else { return }
             withAnimation(.easeInOut(duration: 0.2)) { previewVisible = true }
         }
     }
 }
 
+/// One decoder for the whole hover layer. A cell appearing must not spin up its own `AVQueuePlayer`: the
+/// player keeps its identity and only its item changes, so no view has to observe anything.
+@MainActor
+final class HoverPlayer {
+    static let shared = HoverPlayer()
+
+    let player: AVQueuePlayer = {
+        let queue = AVQueuePlayer()
+        queue.isMuted = true
+        return queue
+    }()
+    private var looper: AVPlayerLooper?
+    private var url: URL?
+
+    func show(_ url: URL) {
+        guard url != self.url else { player.play(); return }
+        self.url = url
+        player.removeAllItems()
+        looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+        player.play()
+    }
+
+    /// A cell leaving must not pause a wallpaper a newer cell just started showing, so only the cell that
+    /// still owns the player gets to stop it.
+    func hide(ifShowing url: URL) {
+        guard url == self.url else { return }
+        player.pause()
+    }
+}
+
 private struct HoverPreview: View {
     let item: VideoItem
-    @StateObject private var player = PreviewPlayer()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -538,15 +652,12 @@ private struct HoverPreview: View {
             if reduceMotion {
                 Color.black
             } else {
-                PlayerSurface(player: player.player)
+                PlayerSurface(player: HoverPlayer.shared.player)
             }
         }
         .allowsHitTesting(false)
-        .onAppear {
-            player.load(item.url)
-            player.setActive(true)
-        }
-        .onDisappear { player.setActive(false) }
+        .onAppear { HoverPlayer.shared.show(item.url) }
+        .onDisappear { HoverPlayer.shared.hide(ifShowing: item.url) }
     }
 }
 
@@ -606,7 +717,8 @@ struct LWEmptyState: View {
         .background { glassShape(radius: 24) }
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(targeted ? Color.accentColor : Color.secondary.opacity(0.22),
+                .strokeBorder(targeted ? AnyShapeStyle(LWTheme.accentFlow)
+                                       : AnyShapeStyle(Color.secondary.opacity(0.22)),
                               style: StrokeStyle(lineWidth: targeted ? 2 : 1,
                                                  dash: targeted ? [] : [6, 6]))
                 .animation(LWMotion.hover, value: targeted)
