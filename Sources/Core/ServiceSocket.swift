@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-// UI (LiveWallpaper.app) <-> background service (LiveWallpaperService) over a Unix domain socket.
+// UI (PaperFlow.app) <-> background service (PaperFlowService) over a Unix domain socket.
 // Replaces NSXPC + launchd, which refuses to spawn an ad hoc signed service (spawn failed, EX_CONFIG).
 // Frame: 4-byte big-endian length, then a JSON `ServiceEnvelope`. Payloads are JSON `ServiceCommand` /
 // `ServiceStatus` (see ServiceXPC.swift), so the transport never changes when a command is added.

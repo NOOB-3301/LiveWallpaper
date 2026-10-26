@@ -85,18 +85,18 @@ jobs:
           ./build.sh
 
       - name: Verify the bundle
-        run: scripts/verify-bundle.sh build/LiveWallpaper.app "${{ steps.version.outputs.version }}"
+        run: scripts/verify-bundle.sh build/PaperFlow.app "${{ steps.version.outputs.version }}"
 
       - name: Make the DMG
-        run: scripts/make-dmg.sh build/LiveWallpaper.app "${{ steps.version.outputs.version }}"
+        run: scripts/make-dmg.sh build/PaperFlow.app "${{ steps.version.outputs.version }}"
 
       - name: Upload the DMG (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: LiveWallpaper-${{ steps.version.outputs.version }}-dmg
+          name: PaperFlow-${{ steps.version.outputs.version }}-dmg
           path: |
-            dist/LiveWallpaper-${{ steps.version.outputs.version }}.dmg
-            dist/LiveWallpaper-${{ steps.version.outputs.version }}.dmg.sha256
+            dist/PaperFlow-${{ steps.version.outputs.version }}.dmg
+            dist/PaperFlow-${{ steps.version.outputs.version }}.dmg.sha256
           if-no-files-found: error
 
       - name: Publish the GitHub Release
@@ -106,19 +106,23 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           cat > release-notes.md <<'NOTES'
+          Renamed from Live Wallpaper. Your library, playlists and settings carry over and permissions stay
+          granted, because the app keeps its original bundle identifier. After installing, delete
+          `/Applications/LiveWallpaper.app` so macOS cannot launch or update the older copy.
+
           Ad-hoc signed, not notarized. On first launch macOS will say it cannot verify the app:
           open System Settings > Privacy & Security, scroll down and press "Open Anyway" once, or run
-          `xattr -dr com.apple.quarantine /Applications/LiveWallpaper.app` in Terminal. Details are in the README.
+          `xattr -dr com.apple.quarantine /Applications/PaperFlow.app` in Terminal. Details are in the README.
 
-          Verify the download with the `.sha256` file: `shasum -a 256 -c LiveWallpaper-__VERSION__.dmg.sha256`.
+          Verify the download with the `.sha256` file: `shasum -a 256 -c PaperFlow-__VERSION__.dmg.sha256`.
 
           Not affiliated with Valve or Wallpaper Engine. Steam downloads use Valve's own SteamCMD with your own account.
           NOTES
           sed -i '' "s/__VERSION__/$VERSION/g" release-notes.md
-          FILES=("dist/LiveWallpaper-$VERSION.dmg" "dist/LiveWallpaper-$VERSION.dmg.sha256")
+          FILES=("dist/PaperFlow-$VERSION.dmg" "dist/PaperFlow-$VERSION.dmg.sha256")
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${FILES[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --title "LiveWallpaper $VERSION" \
+            gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --title "PaperFlow $VERSION" \
               --notes-file release-notes.md --generate-notes
           fi

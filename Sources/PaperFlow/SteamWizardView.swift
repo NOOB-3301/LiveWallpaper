@@ -321,7 +321,7 @@ private struct ToolsContent: View {
             BusyLine(text: "Checking…")
         case .missing:
             VStack(alignment: .leading, spacing: 10) {
-                Text("Live Wallpaper downloads Steam’s official command-line tool (SteamCMD, about 3 MB) from Valve. It is used only to download wallpapers you ask for, with your own Steam account.")
+                Text("PaperFlow downloads Steam’s official command-line tool (SteamCMD, about 3 MB) from Valve. It is used only to download wallpapers you ask for, with your own Steam account.")
                     .foregroundStyle(.secondary)
                 Button("Install Steam tools") { setup.installTools() }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
@@ -437,7 +437,7 @@ private struct SignInForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let error = setup.lastError, error != .cancelled { ErrorLines(error: error) }
-            Text("Use the Steam account that owns Wallpaper Engine. Your password goes straight to Valve’s tool. Live Wallpaper never stores it.")
+            Text("Use the Steam account that owns Wallpaper Engine. Your password goes straight to Valve’s tool. PaperFlow never stores it.")
                 .foregroundStyle(.secondary)
             TextField("Username", text: $setup.username)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: 320).disableAutocorrection(true)
@@ -549,7 +549,7 @@ private struct UnrecognizedPromptContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Live Wallpaper doesn’t recognise Steam’s last message. You can sign in using Terminal instead.")
+            Text("PaperFlow doesn’t recognise Steam’s last message. You can sign in using Terminal instead.")
                 .foregroundStyle(.secondary)
             Text(lastLines)
                 .font(.system(.caption, design: .monospaced)).textSelection(.enabled)

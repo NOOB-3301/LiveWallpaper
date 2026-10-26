@@ -36,7 +36,7 @@ struct PlaybackSettingsView: View {
                         .font(.system(size: 26, weight: .light))
                         .foregroundStyle(.tint)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Live Wallpaper").font(.callout.weight(.semibold))
+                        Text("PaperFlow").font(.callout.weight(.semibold))
                         Text("Version \(version)")
                             .font(.caption).foregroundStyle(.secondary)
                     }

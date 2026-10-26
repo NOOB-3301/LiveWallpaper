@@ -1,7 +1,7 @@
 import AppKit
 import Core
 
-// Copied from LiveWallpaperAgent/Orchestrator.swift and adapted for the service: the desktop is drawn by a
+// Adapted for the service: the desktop is drawn by a
 // WallpaperService (VideoRenderService or SceneRenderService) instead of the agent's windows + the old scene host,
 // and the service is the only writer of state.json (StateStore.commit / setMuted). Two channels, one per
 // WallpaperTarget (SPEC3.md section 1.2): a changed config of one target never restarts the other.

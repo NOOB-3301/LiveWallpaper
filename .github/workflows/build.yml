@@ -92,14 +92,14 @@ jobs:
         run: ./build.sh
 
       - name: Verify bundle layout (app + service)
-        run: scripts/verify-bundle.sh build/LiveWallpaper.app
+        run: scripts/verify-bundle.sh build/PaperFlow.app
 
       - name: Zip app bundle
-        run: ditto -c -k --keepParent build/LiveWallpaper.app LiveWallpaper-macos-26.zip
+        run: ditto -c -k --keepParent build/PaperFlow.app PaperFlow-macos-26.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiveWallpaper-macos-26
-          path: LiveWallpaper-macos-26.zip
+          name: PaperFlow-macos-26
+          path: PaperFlow-macos-26.zip
           if-no-files-found: error

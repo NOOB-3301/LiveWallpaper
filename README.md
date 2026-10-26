@@ -1,6 +1,6 @@
-# Live Wallpaper for macOS: video and Wallpaper Engine wallpapers, rendered with Rust + Metal
+# PaperFlow for macOS: video and Wallpaper Engine wallpapers, rendered with Rust + Metal
 
-<img src="assets/logos/app-icon.svg" width="128" alt="Live Wallpaper app icon">
+<img src="assets/logos/app-icon.svg" width="128" alt="PaperFlow app icon">
 
 [![Build](https://github.com/NOOB-3301/LiveWallpaper/actions/workflows/build.yml/badge.svg)](https://github.com/NOOB-3301/LiveWallpaper/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/NOOB-3301/LiveWallpaper)](../../releases)
@@ -10,9 +10,9 @@
 ![Rust](https://img.shields.io/badge/renderer-Rust%20%2B%20Metal-orange)
 ![Swift](https://img.shields.io/badge/app-Swift%20%2B%20SwiftUI-F05138)
 
-**Live Wallpaper** is a free, open-source animated wallpaper app for macOS. It plays videos and **Wallpaper Engine scenes** as your desktop wallpaper, rotates through a playlist on a timer, plays video on the lock screen (macOS 26+), and downloads wallpapers from the **Steam Workshop** with your own Steam account. Scenes are drawn by our own Rust + Metal renderer that sleeps when nothing is moving, so it stays light on battery.
+**PaperFlow** is a free, open-source animated wallpaper app for macOS. It plays videos and **Wallpaper Engine scenes** as your desktop wallpaper, rotates through a playlist on a timer, plays video on the lock screen (macOS 26+), and downloads wallpapers from the **Steam Workshop** with your own Steam account. Scenes are drawn by our own Rust + Metal renderer that sleeps when nothing is moving, so it stays light on battery.
 
-![Live Wallpaper settings window: a video wallpaper selected, with Set as Desktop / Lock Screen, rotation and scene frame-rate options](assets/screenshots/library-detail.png)
+![PaperFlow settings window: a video wallpaper selected, with Set as Desktop / Lock Screen, rotation and scene frame-rate options](assets/screenshots/library-detail.png)
 
 ## Resource Usage
 
@@ -91,12 +91,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the process, IPC and bridge diagram.
 
 ## Install
 
-1. Download `LiveWallpaper-<version>.dmg` from the [Releases](../../releases) page. Optional: check it with `shasum -a 256 -c LiveWallpaper-<version>.dmg.sha256` in the same folder.
-2. Open the DMG and drag **LiveWallpaper** onto the **Applications** shortcut.
+1. Download `PaperFlow-<version>.dmg` from the [Releases](../../releases) page. Optional: check it with `shasum -a 256 -c PaperFlow-<version>.dmg.sha256` in the same folder.
+2. Open the DMG and drag **PaperFlow** onto the **Applications** shortcut. If **Live Wallpaper** is still installed, delete `/Applications/LiveWallpaper.app` first — the two share a bundle identifier, so macOS can otherwise launch or update the wrong copy.
 3. First launch. The app is signed ad hoc and **not notarized** (there is no paid Apple Developer account behind this project), so macOS blocks a downloaded copy the first time. Do one of these once:
-   - Try to open it, then go to **System Settings > Privacy & Security**, scroll to the message about "LiveWallpaper", and press **Open Anyway**.
-   - Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/LiveWallpaper.app` (this also covers the nested service).
-4. macOS may ask for access to your Desktop, Documents or Downloads folder, once for the Settings app and once for the background service (the service is what reads your videos and scenes).
+   - Try to open it, then go to **System Settings > Privacy & Security**, scroll to the message about "PaperFlow", and press **Open Anyway**.
+   - Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/PaperFlow.app` (this also covers the nested service).
+4. macOS may ask for access to your Desktop, Documents or Downloads folder, once for the Settings app and once for the background service (the service is what reads your videos and scenes). Every build is signed with a fresh ad-hoc identity, so expect these prompts again after an update, including the first launch after upgrading from Live Wallpaper.
 
 ## Usage
 
@@ -109,7 +109,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the process, IPC and bridge diagram.
 - The service's menu bar item offers Open Settings, Start/Stop, Pause/Resume, Next Desktop Wallpaper, Next Lock Screen Wallpaper, Mute and Quit.
 - Closing the Settings window quits Settings; the service keeps playing. Choosing Quit Wallpaper restores Apple's wallpapers and stops the service.
 
-Everything the app installs stays in `~/Library/Application Support/LiveWallpaper/` and `~/Library/Caches/LiveWallpaperSteam/`. Remove the app and those folders to uninstall; choose **Quit Wallpaper** in the menu bar first so Apple's original wallpapers are restored.
+Everything the app installs stays in `~/Library/Application Support/LiveWallpaper/` and `~/Library/Caches/LiveWallpaperSteam/`. Those folders keep their pre-rename names on purpose, so upgrading from Live Wallpaper carries your library, playlists and settings across; remove the app and those folders to uninstall, and choose **Quit Wallpaper** in the menu bar first so Apple's original wallpapers are restored.
 
 ## Requirements
 
@@ -123,10 +123,10 @@ Release builds are arm64. `UNIVERSAL=1 ./build.sh` adds an x86_64 slice (it need
 
 ```sh
 ./build.sh
-open build/LiveWallpaper.app
+open build/PaperFlow.app
 ```
 
-`build.sh` first runs `scripts/build-scene-renderer.sh`, which builds the scene renderer (`SceneRenderer/target/release/libscene_renderer.a`) and regenerates its UniFFI Swift bindings in `Sources/SceneBridge`. It then builds the two Swift products and assembles `build/LiveWallpaper.app` with `LiveWallpaperService.app` nested at `Contents/Library/LoginItems/`, and signs both ad hoc.
+`build.sh` first runs `scripts/build-scene-renderer.sh`, which builds the scene renderer (`SceneRenderer/target/release/libscene_renderer.a`) and regenerates its UniFFI Swift bindings in `Sources/SceneBridge`. It then builds the two Swift products and assembles `build/PaperFlow.app` with `PaperFlowService.app` nested at `Contents/Library/LoginItems/`, and signs both ad hoc.
 
 Run the app through the `.app` bundle. `swift run` does not work, because both products need their `Info.plist`.
 
@@ -138,15 +138,15 @@ Useful options:
 
 The build checks that Settings never links the old scene engine and that the service never links SwiftUI or the old in-repo scene engine. The service does link Metal and `SceneBridge` for scenes.
 
-`scripts/make-dmg.sh build/LiveWallpaper.app 1.2.3` packs the app into `dist/LiveWallpaper-1.2.3.dmg` with an Applications shortcut and a SHA-256 file. Pushing a tag such as `v1.2.3` runs the `release` workflow on a macOS 26 runner and attaches the DMG to a GitHub Release.
+`scripts/make-dmg.sh build/PaperFlow.app 1.2.3` packs the app into `dist/PaperFlow-1.2.3.dmg` with an Applications shortcut and a SHA-256 file. Pushing a tag such as `v1.2.3` runs the `release` workflow on a macOS 26 runner and attaches the DMG to a GitHub Release.
 
 ## Architecture
 
-Two processes: the SwiftUI **LiveWallpaper** (Settings) app, which plays nothing, and the nested AppKit **LiveWallpaperService**, which owns playback, the lock screen, rotation timers, the Unix socket and `state.json`. Settings sends commands to the service over the socket and never imports `SceneBridge`. The Rust renderer is statically linked into the service, not a separate process. Full diagram, state ownership and option mapping: [ARCHITECTURE.md](ARCHITECTURE.md).
+Two processes: the SwiftUI **PaperFlow** (Settings) app, which plays nothing, and the nested AppKit **PaperFlowService**, which owns playback, the lock screen, rotation timers, the Unix socket and `state.json`. Settings sends commands to the service over the socket and never imports `SceneBridge`. The Rust renderer is statically linked into the service, not a separate process. Full diagram, state ownership and option mapping: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## FAQ
 
-**Does Wallpaper Engine work on Mac?** Not officially. Live Wallpaper plays Wallpaper Engine *video* and *scene* wallpapers natively on macOS. Web and application wallpapers are not supported.
+**Does Wallpaper Engine work on Mac?** Not officially. PaperFlow plays Wallpaper Engine *video* and *scene* wallpapers natively on macOS. Web and application wallpapers are not supported.
 
 **Do I need Wallpaper Engine or Steam?** Local videos need neither. Workshop downloads use Valve's SteamCMD with your own Steam account, and the Steam Setup page walks you through it.
 

@@ -8,13 +8,13 @@ import Core
 // is active. There is no menu bar extra here; the agent owns the status item.
 
 @main
-struct LiveWallpaperApp: App {
+struct PaperFlowApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = SettingsModel.shared
     @StateObject private var workshop = WorkshopModel.shared
 
     var body: some Scene {
-        Window("Live Wallpaper", id: "main") {
+        Window("PaperFlow", id: "main") {
             RootView(model: model, workshop: workshop)
         }
         .defaultSize(width: 1200, height: 780)
@@ -298,7 +298,7 @@ struct RootView: View {
     /// One banner at a time, in priority order.
     private var banner: Banner? {
         if model.legacyAppRunning {
-            return Banner(text: "An older copy of Live Wallpaper is still running. Quit it so the two don’t fight over your wallpaper.")
+            return Banner(text: "An older copy of this app is still running. Quit it so the two don’t fight over your wallpaper.")
         }
         if model.importedFromPhase1 > 0 {
             let count = model.importedFromPhase1
