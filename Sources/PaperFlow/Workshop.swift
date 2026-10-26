@@ -117,11 +117,11 @@ enum WorkshopError: Error, Equatable {
             default: return "Only video and scene wallpapers can play here."
             }
         case .unsupportedFormat(let ext):
-            return "This wallpaper’s video is a .\(ext) file. Live Wallpaper plays MP4, MOV and M4V and doesn’t convert other formats."
+            return "This wallpaper’s video is a .\(ext) file. PaperFlow plays MP4, MOV and M4V and doesn’t convert other formats."
         case .unsupportedCodec:
             return "macOS can’t decode this video (probably VP9 or AV1). Choose a wallpaper with an H.264 or HEVC video."
         case .steamcmdMissing:
-            return "Open Steam Setup and choose Install Steam tools. Live Wallpaper downloads Valve’s tool for you."
+            return "Open Steam Setup and choose Install Steam tools. PaperFlow downloads Valve’s tool for you."
         case .rosettaMissing:
             return "SteamCMD is an Intel program. On Apple silicon install Rosetta once: softwareupdate --install-rosetta --agree-to-license"
         case .usernameMissing:

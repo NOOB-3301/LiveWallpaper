@@ -182,7 +182,7 @@ final class SteamPTYSession: @unchecked Sendable {
 
     private let command: SteamCommandLine
     private let useScript: Bool
-    private let queue = DispatchQueue(label: "LiveWallpaper.steam.pty")
+    private let queue = DispatchQueue(label: "PaperFlow.steam.pty")
     private let lock = NSLock()
     private var master: Int32 = -1
     private var process: Process?

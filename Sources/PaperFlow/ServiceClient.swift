@@ -2,7 +2,7 @@ import AppKit
 import ServiceManagement
 import Core
 
-// The UI's only link to the background service (LiveWallpaperService): one ServiceSocketClient connection to
+// The UI's only link to the background service (PaperFlowService): one ServiceSocketClient connection to
 // ServiceSocket.path. When nothing answers, the UI launches the nested service app itself (no launchd), sends
 // ServiceCommands and publishes the ServiceStatus it reports.
 
@@ -32,9 +32,9 @@ struct ServiceError: LocalizedError {
     private var loginItemTried = false
     private var quitRequested = false   // Quit Service: reconnect only if something else starts the service
 
-    /// <LiveWallpaper.app>/Contents/Library/LoginItems/LiveWallpaperService.app
+    /// <PaperFlow.app>/Contents/Library/LoginItems/PaperFlowService.app
     private static let serviceApp = Bundle.main.bundleURL
-        .appendingPathComponent("Contents/Library/LoginItems/LiveWallpaperService.app", isDirectory: true)
+        .appendingPathComponent("Contents/Library/LoginItems/PaperFlowService.app", isDirectory: true)
 
     // MARK: Lifecycle
 
@@ -80,7 +80,7 @@ struct ServiceError: LocalizedError {
             while !(await Self.isServing(path)) {
                 waited += 1
                 guard waited <= 20, !Task.isCancelled else {
-                    return fail("The wallpaper service didn’t start. Try Connect to Service, or reinstall Live Wallpaper.")
+                    return fail("The wallpaper service didn’t start. Try Connect to Service, or reinstall PaperFlow.")
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
@@ -114,7 +114,7 @@ struct ServiceError: LocalizedError {
         configuration.activates = false
         configuration.addsToRecentItems = false
         NSWorkspace.shared.openApplication(at: Self.serviceApp, configuration: configuration) { _, error in
-            if let error { NSLog("LiveWallpaper: couldn’t launch the service: \(error.localizedDescription)") }
+            if let error { NSLog("PaperFlow: couldn’t launch the service: \(error.localizedDescription)") }
         }
         return true
     }
@@ -124,12 +124,11 @@ struct ServiceError: LocalizedError {
         guard !loginItemTried else { return }
         loginItemTried = true
         let item = SMAppService.loginItem(identifier: "com.noob3301.LiveWallpaper.service")
-        guard item.status == .notRegistered else {
-            if item.status != .enabled { NSLog("LiveWallpaper: service login item status \(item.status.rawValue)") }
-            return
-        }
+        // The bundle id survived the rename, the bundle path didn't. A registration made by an older copy
+        // would keep pointing at it, so replace it with one from this copy instead of trusting it.
+        if item.status != .notRegistered { try? item.unregister() }
         do { try item.register() } catch {
-            NSLog("LiveWallpaper: couldn’t register the service as a login item: \(error.localizedDescription)")
+            NSLog("PaperFlow: couldn’t register the service as a login item: \(error.localizedDescription)")
         }
     }
 

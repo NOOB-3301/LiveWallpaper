@@ -5,11 +5,11 @@ import PackageDescription
 //   Core                    (library)    settings model, state file, XPC/socket messages; no SwiftUI/AppKit
 //   SceneFormat             (library)    scene package, texture and scene.json parsing; Foundation only
 //   SceneRendererFFI/SceneBridge         Rust + Metal scene renderer (SceneRenderer/, built by scripts/build-scene-renderer.sh)
-//   LiveWallpaperService    (executable) background service: menu bar, playback, lock screen, socket server
-//   LiveWallpaper           (executable) settings app, SwiftUI; Steam sign-in and Workshop downloads
+//   PaperFlowService        (executable) background service: menu bar, playback, lock screen, socket server
+//   PaperFlow               (executable) settings app, SwiftUI; Steam sign-in and Workshop downloads
 // Deployment target stays macOS 13 for every target: nothing in the scene engine needs newer API (SPEC3.md 0).
 let package = Package(
-    name: "LiveWallpaper",
+    name: "PaperFlow",
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "Core", targets: ["Core"]),
@@ -51,14 +51,14 @@ let package = Package(
         ),
         // Background service: the only writer of state.json, plays wallpapers, XPC to the UI. AppKit only.
         .executableTarget(
-            name: "LiveWallpaperService",
+            name: "PaperFlowService",
             dependencies: ["Core", "SceneBridge"],
-            path: "Sources/LiveWallpaperService"
+            path: "Sources/PaperFlowService"
         ),
         .executableTarget(
-            name: "LiveWallpaper",
+            name: "PaperFlow",
             dependencies: ["Core", "SceneFormat"],
-            path: "Sources/LiveWallpaper"
+            path: "Sources/PaperFlow"
         ),
         .testTarget(
             name: "CoreTests",

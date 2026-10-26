@@ -1,6 +1,6 @@
 import Foundation
 
-// Messages between the UI (LiveWallpaper.app) and the background service (LiveWallpaperService), carried as JSON
+// Messages between the UI (PaperFlow.app) and the background service (PaperFlowService), carried as JSON
 // over the Unix socket in ServiceSocket.swift. The service is the only writer of state.json and does all rendering;
 // the UI sends commands and shows status.
 
