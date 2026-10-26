@@ -1,9 +1,9 @@
 # Architecture
 
-Live Wallpaper is one app bundle with two running processes:
+PaperFlow is one app bundle with two running processes:
 
-- **LiveWallpaper.app** — the SwiftUI Settings app. It reads the library, edits settings, drives Steam Workshop downloads and sends commands to the service. It never plays a wallpaper and, after the one-time schema migration described below, never writes `state.json`.
-- **LiveWallpaperService.app** — the nested AppKit background service at `Contents/Library/LoginItems/`. It owns playback, the lock screen, rotation timers, the menu bar item, the Unix socket and `state.json`.
+- **PaperFlow.app** — the SwiftUI Settings app. It reads the library, edits settings, drives Steam Workshop downloads and sends commands to the service. It never plays a wallpaper and, after the one-time schema migration described below, never writes `state.json`.
+- **PaperFlowService.app** — the nested AppKit background service at `Contents/Library/LoginItems/`. It owns playback, the lock screen, rotation timers, the menu bar item, the Unix socket and `state.json`.
 
 The Rust/C++ scene renderer is statically linked into the service and accessed in-process through UniFFI. There is no scene-host process, no XPC service and no per-scene subprocess.
 
@@ -13,14 +13,14 @@ The outer graph is vertical; the app, playback services and renderer use horizon
 
 ```mermaid
 flowchart TB
-    subgraph APP["LiveWallpaper.app"]
+    subgraph APP["PaperFlow.app"]
         direction LR
-        UI["LiveWallpaper Settings<br/>SwiftUI · no playback · no runtime state writes"]
+        UI["PaperFlow Settings<br/>SwiftUI · no playback · no runtime state writes"]
         CLIENT["ServiceClient<br/>launch · SMAppService registration<br/>ServiceCommand / ServiceStatus"]
         UI --> CLIENT
     end
 
-    subgraph SERVICE["LiveWallpaperService.app / executable<br/>AppKit · menu bar · login item"]
+    subgraph SERVICE["PaperFlowService.app / executable<br/>AppKit · menu bar · login item"]
         direction TB
         ENTRY["ServiceEntry / ServiceDelegate<br/>NSApplicationDelegate"]
         SOCK["SocketServer"]

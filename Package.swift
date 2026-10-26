@@ -5,13 +5,13 @@ import PackageDescription
 //   Core                    (library)    settings model, state file, XPC/socket messages; no SwiftUI/AppKit
 //   SceneFormat             (library)    scene package, texture and scene.json parsing; Foundation only
 //   SceneRendererFFI/SceneBridge         Rust + Metal scene renderer (SceneRenderer/, built by scripts/build-scene-renderer.sh)
-//   LiveWallpaperService    (executable) background service: menu bar, playback, lock screen, socket server
-//   LiveWallpaper           (executable) settings app, SwiftUI; Steam sign-in and Workshop downloads
+//   PaperFlowService        (executable) background service: menu bar, playback, lock screen, socket server
+//   PaperFlow               (executable) settings app, SwiftUI; Steam sign-in and Workshop downloads
 // API floor macOS 14: the scroll and inspector APIs the UI uses are 14-only, so the pre-14 fallbacks are
 // gone. The install floor is higher — the Rust renderer compiles at MACOSX_DEPLOYMENT_TARGET=15.0, so the
 // plists say 15.0. (tools-version 5.9 has no `.macOS(.v15)`; raising it would flip every target to Swift 6.)
 let package = Package(
-    name: "LiveWallpaper",
+    name: "PaperFlow",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "Core", targets: ["Core"]),
@@ -53,14 +53,14 @@ let package = Package(
         ),
         // Background service: the only writer of state.json, plays wallpapers, XPC to the UI. AppKit only.
         .executableTarget(
-            name: "LiveWallpaperService",
+            name: "PaperFlowService",
             dependencies: ["Core", "SceneBridge"],
-            path: "Sources/LiveWallpaperService"
+            path: "Sources/PaperFlowService"
         ),
         .executableTarget(
-            name: "LiveWallpaper",
+            name: "PaperFlow",
             dependencies: ["Core", "SceneFormat"],
-            path: "Sources/LiveWallpaper"
+            path: "Sources/PaperFlow"
         ),
         .testTarget(
             name: "CoreTests",

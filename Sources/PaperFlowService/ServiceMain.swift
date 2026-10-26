@@ -1,7 +1,7 @@
 import AppKit
 import Core
 
-// Entry point, socket server and status item of the background service (adapted from LiveWallpaperAgent/AgentMain).
+// Entry point, socket server and status item of the background service.
 // The UI launches it when nothing answers on ServiceSocket.path; it may also be registered as a login item.
 // AppKit only: never import SwiftUI or Combine here.
 
@@ -57,7 +57,7 @@ enum ServiceEntry {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         guard !ServiceSocket.isServing(), !hasLowerPidPeer() else {
-            NSLog("LiveWallpaperService: another copy is already running; exiting.")
+            NSLog("PaperFlowService: another copy is already running; exiting.")
             NSApp.terminate(nil)
             return
         }
@@ -67,7 +67,7 @@ enum ServiceEntry {
         orchestrator.onChange = { [weak self] in self?.orchestratorChanged() }
         server.perform = { [weak self] command in self?.perform(command) ?? (ServiceStatus(), nil) }
         do { try server.start() } catch {
-            NSLog("LiveWallpaperService: can’t listen on \(ServiceSocket.path): \(error.localizedDescription)")
+            NSLog("PaperFlowService: can’t listen on \(ServiceSocket.path): \(error.localizedDescription)")
         }
         refreshMenu()
     }
@@ -163,7 +163,7 @@ enum ServiceEntry {
     private func refreshMenu() {
         let running = orchestrator.isRunning
         let symbol = running ? (orchestrator.isPaused ? "pause.rectangle.fill" : "play.rectangle.fill") : "play.rectangle"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Live Wallpaper")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "PaperFlow")
         image?.isTemplate = true
         statusItem?.button?.image = image
 
@@ -225,7 +225,7 @@ enum ServiceEntry {
     @objc private func toggleMute() { orchestrator.setMuted(!orchestrator.muted) }
     @objc private func quitFromMenu() { quitWallpaper() }
 
-    // The service lives at <LiveWallpaper.app>/Contents/Library/LoginItems/LiveWallpaperService.app.
+    // The service lives at <PaperFlow.app>/Contents/Library/LoginItems/PaperFlowService.app.
     @objc private func openSettings() {
         let nested = Bundle.main.bundleURL
             .deletingLastPathComponent().deletingLastPathComponent()

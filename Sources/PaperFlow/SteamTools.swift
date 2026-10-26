@@ -1218,7 +1218,7 @@ final class SteamDownload: NSObject, URLSessionDownloadDelegate, @unchecked Send
                 self.pendingDepot = depot
                 self.assets = .needsConfirmation(downloadBytes: depot.bytes, depotName: depot.name)
             } else {
-                self.assets = .unavailable("Live Wallpaper couldn’t find Wallpaper Engine’s shared files on Steam. Scenes that need them will show their preview only.")
+                self.assets = .unavailable("PaperFlow couldn’t find Wallpaper Engine’s shared files on Steam. Scenes that need them will show their preview only.")
             }
             SteamRunGate.release()
         }

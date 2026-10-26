@@ -5,80 +5,40 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Debug LiveWallpaper",
-            "target": "LiveWallpaper",
+            "name": "Debug PaperFlow",
+            "target": "PaperFlow",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug LiveWallpaper"
+            "preLaunchTask": "swift: Build Debug PaperFlow"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Release LiveWallpaper",
-            "target": "LiveWallpaper",
+            "name": "Release PaperFlow",
+            "target": "PaperFlow",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release LiveWallpaper"
+            "preLaunchTask": "swift: Build Release PaperFlow"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Debug LiveWallpaperAgent",
-            "target": "LiveWallpaperAgent",
+            "name": "Debug PaperFlowService",
+            "target": "PaperFlowService",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug LiveWallpaperAgent"
+            "preLaunchTask": "swift: Build Debug PaperFlowService"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Release LiveWallpaperAgent",
-            "target": "LiveWallpaperAgent",
+            "name": "Release PaperFlowService",
+            "target": "PaperFlowService",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release LiveWallpaperAgent"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Debug LiveWallpaperSceneHost",
-            "target": "LiveWallpaperSceneHost",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug LiveWallpaperSceneHost"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Release LiveWallpaperSceneHost",
-            "target": "LiveWallpaperSceneHost",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release LiveWallpaperSceneHost"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Debug LiveWallpaperService",
-            "target": "LiveWallpaperService",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug LiveWallpaperService"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:LiveWallpaper}",
-            "name": "Release LiveWallpaperService",
-            "target": "LiveWallpaperService",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release LiveWallpaperService"
+            "preLaunchTask": "swift: Build Release PaperFlowService"
         }
     ]
 }

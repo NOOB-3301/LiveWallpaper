@@ -5,11 +5,11 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.noob3301.LiveWallpaper</string>
 	<key>CFBundleName</key>
-	<string>Live Wallpaper</string>
+	<string>PaperFlow</string>
 	<key>CFBundleDisplayName</key>
-	<string>Live Wallpaper</string>
+	<string>PaperFlow</string>
 	<key>CFBundleExecutable</key>
-	<string>LiveWallpaper</string>
+	<string>PaperFlow</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -35,14 +35,14 @@
 	<key>NSSupportsSuddenTermination</key>
 	<false/>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<string>PaperFlow needs access to play the videos you chose.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<string>PaperFlow needs access to play the videos you chose.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<string>PaperFlow needs access to play the videos you chose.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>Live Wallpaper needs access to play the videos you chose.</string>
+	<string>PaperFlow needs access to play the videos you chose.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Live Wallpaper uses system audio so scene wallpapers can react to the music you play.</string>
+	<string>PaperFlow uses system audio so scene wallpapers can react to the music you play.</string>
 </dict>
 </plist>

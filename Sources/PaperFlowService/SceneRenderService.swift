@@ -75,7 +75,7 @@ final class RendererBox: @unchecked Sendable {
             let renderer = box.renderer
             self.renderer = renderer
             for message in renderer.loadErrors() {
-                NSLog("LiveWallpaper: \(item.name): \(message)")
+                NSLog("PaperFlow: \(item.name): \(message)")
             }
             for display in windows.displays() {
                 let pointer = UInt64(UInt(bitPattern: Unmanaged.passUnretained(display.layer).toOpaque()))
@@ -239,7 +239,7 @@ final class RendererBox: @unchecked Sendable {
                 try tap.start()
                 audio = tap
             } catch {
-                NSLog("LiveWallpaper: audio response unavailable: \(error)")
+                NSLog("PaperFlow: audio response unavailable: \(error)")
             }
         } else if !on, let tap = audio as? SystemAudioTap {
             tap.stop()

@@ -1,7 +1,7 @@
 import Foundation
 
 // Per-scene and global render settings. Stored in state.json (LibraryState.sceneOptions / .power), edited in the
-// settings app, applied by LiveWallpaperService through SceneBridge. Every field has a default, so older files load.
+// settings app, applied by PaperFlowService through SceneBridge. Every field has a default, so older files load.
 
 /// How a scene is fitted to a display (maps to the bridge's scaling mode).
 public enum SceneFitMode: String, Codable, CaseIterable, Sendable {

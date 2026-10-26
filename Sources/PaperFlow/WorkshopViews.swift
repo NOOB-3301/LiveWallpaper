@@ -803,7 +803,7 @@ struct SteamSetupView: View {
                 Button("Choose…") { chooseSteamcmd() }
                 Button("Use automatic") { useAutomaticPath() }.disabled(workshop.steamcmdPathOverride.isEmpty)
             }
-            Text("Only needed if you already have SteamCMD somewhere else. Live Wallpaper installs its own copy otherwise.")
+            Text("Only needed if you already have SteamCMD somewhere else. PaperFlow installs its own copy otherwise.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
