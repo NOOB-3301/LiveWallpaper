@@ -420,7 +420,6 @@ struct WorkshopView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.visible)
-        .background(LWBackground())
     }
 
     /// Live "N downloads in progress" strip in the header; jumps to the Downloads page.
@@ -714,6 +713,7 @@ struct WorkshopView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { detail = item }
                     .scrollAnchorItem(item.id)
+                    .lwScrollEntry()
             }
         }
     }
@@ -761,9 +761,8 @@ struct SteamSetupView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.visible)
-        .background(LWBackground())
         .onAppear { workshop.recheckSetup() }
-        .onChange(of: setup.account) { account in
+        .onChange(of: setup.account) { _, account in
             // The download path reads the username from the Workshop model; keep both on the signed-in name.
             if case .signedIn(let name) = account, workshop.steamUsername != name { workshop.steamUsername = name }
         }

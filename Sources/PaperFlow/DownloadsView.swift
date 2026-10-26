@@ -32,8 +32,7 @@ struct DownloadsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.visible)
-        .background(LWBackground())
-        .animation(LWMotion.content, value: entries.map(\.id))
+        .defaultScrollAnchor(.top)
     }
 
     // MARK: Header
@@ -78,6 +77,7 @@ struct DownloadsView: View {
                 ForEach(active) { entry in
                     DownloadRow(entry: entry, queuePosition: workshop.queuePosition(of: entry.id),
                                 workshop: workshop, model: model, openLibrary: openLibrary)
+                        .lwScrollEntry()
                 }
             }
         }
@@ -90,6 +90,7 @@ struct DownloadsView: View {
                 ForEach(settled) { entry in
                     DownloadRow(entry: entry, queuePosition: nil,
                                 workshop: workshop, model: model, openLibrary: openLibrary)
+                        .lwScrollEntry()
                 }
             }
         }
