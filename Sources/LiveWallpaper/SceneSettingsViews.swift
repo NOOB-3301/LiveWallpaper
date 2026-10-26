@@ -6,24 +6,30 @@ import Core
 
 /// One user property read from a scene's project.json (general.properties).
 struct SceneProperty: Identifiable {
-    enum Kind { case bool, slider(min: Double, max: Double, step: Double), color, text, combo([(label: String, value: ScenePropertyValue)]) }
+    enum Kind { case group, bool, slider(min: Double, max: Double, step: Double), color, text, combo([(label: String, value: ScenePropertyValue)]) }
     let key: String
-    let label: String
+    let label: SceneMarkup
+    let rawLabel: String            // original markup, the stable tie-breaker when two properties share an order
     let kind: Kind
     let order: Int
+    let defaultValue: ScenePropertyValue?
     var id: String { key }
 
-    /// Supported: bool, slider, color, text/textinput, combo. Anything else is skipped.
+    /// Supported: group, bool, slider, color, text/textinput, combo. Anything else is skipped.
     static func load(from projectJSON: URL) -> [SceneProperty] {
         guard let data = try? Data(contentsOf: projectJSON),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let props = (root["general"] as? [String: Any])?["properties"] as? [String: Any] else { return [] }
         return props.compactMap { key, raw -> SceneProperty? in
             guard let p = raw as? [String: Any], let type = (p["type"] as? String)?.lowercased() else { return nil }
-            let label = (p["text"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
+            let rawLabel = (p["text"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
             let order = (p["order"] as? NSNumber)?.intValue ?? 0
-            func make(_ kind: Kind) -> SceneProperty { SceneProperty(key: key, label: label, kind: kind, order: order) }
+            func make(_ kind: Kind) -> SceneProperty {
+                SceneProperty(key: key, label: SceneMarkup(rawLabel), rawLabel: rawLabel, kind: kind,
+                              order: order, defaultValue: Self.defaultValue(p["value"], kind: kind))
+            }
             switch type {
+            case "group": return make(.group)
             case "bool": return make(.bool)
             case "color": return make(.color)
             case "text", "textinput": return make(.text)
@@ -41,22 +47,35 @@ struct SceneProperty: Identifiable {
             default: return nil
             }
         }
-        .sorted { ($0.order, $0.label) < ($1.order, $1.label) }
+        .sorted { ($0.order, $0.rawLabel) < ($1.order, $1.rawLabel) }
     }
 
-    /// The property's default (project.json "value"), used until the user changes it.
-    static func defaults(from projectJSON: URL, key: String) -> Any? {
-        guard let data = try? Data(contentsOf: projectJSON),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let props = (root["general"] as? [String: Any])?["properties"] as? [String: Any] else { return nil }
-        return (props[key] as? [String: Any])?["value"]
+    /// The property's project.json "value", as the value type the renderer takes.
+    private static func defaultValue(_ raw: Any?, kind: Kind) -> ScenePropertyValue? {
+        switch kind {
+        case .group:
+            return nil
+        case .bool:
+            if let b = raw as? Bool { return .bool(b) }
+            return (raw as? NSNumber).map { .bool($0.boolValue) }
+        case .slider:
+            return (raw as? NSNumber).map { .number($0.doubleValue) }
+        case .color:
+            guard let s = raw as? String else { return nil }
+            let c = s.split(separator: " ").compactMap { Double($0) }
+            return c.count >= 3 ? .color(red: c[0], green: c[1], blue: c[2]) : nil
+        case .text:
+            return (raw as? String).map { .string($0) }
+        case .combo:
+            if let n = raw as? NSNumber { return .number(n.doubleValue) }
+            return (raw as? String).map { .string($0) }
+        }
     }
 }
 
 @MainActor
 fileprivate final class ScenePropertyCache {
     static var cache: [UUID: [SceneProperty]] = [:]
-    static var defaults: [UUID: [String: ScenePropertyValue]] = [:]
 }
 
 @MainActor
@@ -122,9 +141,18 @@ struct SceneSettingsCard: View {
         }
     }
 
+    /// Next to scene.pkg; an unpacked import keeps project.json one level above scene/scene.json.
+    private var projectJSONURL: URL {
+        let folder = item.url.deletingLastPathComponent()
+        let direct = folder.appendingPathComponent("project.json")
+        return FileManager.default.fileExists(atPath: direct.path)
+            ? direct
+            : folder.deletingLastPathComponent().appendingPathComponent("project.json")
+    }
+
     private func loadProperties() async {
         if let cached = ScenePropertyCache.cache[item.id] { properties = cached; return }
-        let url = item.url.deletingLastPathComponent().appendingPathComponent("project.json")
+        let url = projectJSONURL
         let loaded = await Task.detached { SceneProperty.load(from: url) }.value
         ScenePropertyCache.cache[item.id] = loaded
         properties = loaded
@@ -132,33 +160,12 @@ struct SceneSettingsCard: View {
 
     // MARK: Reset
 
-    /// The scene's own default for a property (project.json "value"), as the value type the renderer takes.
-    private func defaultValue(_ p: SceneProperty) -> ScenePropertyValue? {
-        guard let d = projectDefault(p) else { return nil }
-        switch p.kind {
-        case .bool:
-            if let b = d as? Bool { return .bool(b) }
-            return (d as? NSNumber).map { .bool($0.boolValue) }
-        case .slider:
-            return (d as? NSNumber).map { .number($0.doubleValue) }
-        case .color:
-            guard let s = d as? String else { return nil }
-            let c = s.split(separator: " ").compactMap { Double($0) }
-            return c.count >= 3 ? .color(red: c[0], green: c[1], blue: c[2]) : nil
-        case .text:
-            return (d as? String).map { .string($0) }
-        case .combo:
-            if let n = d as? NSNumber { return .number(n.doubleValue) }
-            return (d as? String).map { .string($0) }
-        }
-    }
-
     /// True when nothing differs from the defaults (properties count as default when they equal the scene's own).
     private var isDefault: Bool {
         var base = options
         base.properties = [:]
         guard base == .standard else { return false }
-        return properties.allSatisfy { p in options.properties[p.key].map { $0 == defaultValue(p) } ?? true }
+        return properties.allSatisfy { p in options.properties[p.key].map { $0 == p.defaultValue } ?? true }
     }
 
     /// Every setting back to its default. Overridden properties get their default written explicitly: dropping the
@@ -168,7 +175,7 @@ struct SceneSettingsCard: View {
         model.updateSceneOptions(item.id) { o in
             o = .standard
             for p in properties where overridden[p.key] != nil {
-                if let d = defaultValue(p) { o.properties[p.key] = d }
+                if let d = p.defaultValue { o.properties[p.key] = d }
             }
         }
     }
@@ -179,57 +186,83 @@ struct SceneSettingsCard: View {
     private func set(_ p: SceneProperty, _ v: ScenePropertyValue) {
         model.updateSceneOptions(item.id) { $0.properties[p.key] = v }
     }
-    private func projectDefault(_ p: SceneProperty) -> Any? {
-        SceneProperty.defaults(from: item.url.deletingLastPathComponent().appendingPathComponent("project.json"), key: p.key)
-    }
 
     @ViewBuilder private func propertyRow(_ p: SceneProperty) -> some View {
-        let def = projectDefault(p)
-        switch p.kind {
-        case .bool:
-            Toggle(p.label, isOn: Binding(
-                get: { if case .bool(let b)? = current(p) { return b }; return (def as? NSNumber)?.boolValue ?? false },
-                set: { set(p, .bool($0)) }))
-        case .slider(let lo, let hi, _):
-            HStack {
-                Text(p.label)
-                Slider(value: Binding(
-                    get: { if case .number(let n)? = current(p) { return n }; return (def as? NSNumber)?.doubleValue ?? lo },
-                    set: { set(p, .number($0)) }), in: lo...hi)
-            }
-        case .color:
-            ColorPicker(p.label, selection: Binding(
-                get: {
-                    if case .color(let r, let g, let b)? = current(p) { return Color(red: r, green: g, blue: b) }
-                    let c = ((def as? String) ?? "1 1 1").split(separator: " ").compactMap { Double($0) }
-                    return c.count >= 3 ? Color(red: c[0], green: c[1], blue: c[2]) : .white
-                },
-                set: { c in
-                    let n = NSColor(c).usingColorSpace(.sRGB) ?? .white
-                    set(p, .color(red: n.redComponent, green: n.greenComponent, blue: n.blueComponent))
-                }), supportsOpacity: false)
-        case .text:
-            HStack {
-                Text(p.label)
-                TextField("", text: Binding(
-                    get: { if case .string(let s)? = current(p) { return s }; return (def as? String) ?? "" },
-                    set: { set(p, .string($0)) })).textFieldStyle(.roundedBorder)
-            }
-        case .combo(let choices):
-            HStack {
-                Text(p.label); Spacer()
-                Picker(p.label, selection: Binding<Int>(
+        // Labels that are only images/rules are the authors' section separators; their control is meaningless.
+        if p.kind.isGroup {
+            SceneMarkupView(markup: p.label)
+                .padding(.top, 8)
+        } else if p.label.isDecorationOnly {
+            SceneMarkupView(markup: p.label)
+        } else {
+            switch p.kind {
+            case .group:
+                EmptyView()
+            case .bool:
+                Toggle(isOn: Binding(
                     get: {
-                        if let v = current(p), let i = choices.firstIndex(where: { $0.value == v }) { return i }
-                        if let n = def as? NSNumber, let i = choices.firstIndex(where: { $0.value == .number(n.doubleValue) }) { return i }
-                        if let s = def as? String, let i = choices.firstIndex(where: { $0.value == .string(s) }) { return i }
-                        return 0
+                        if case .bool(let b)? = current(p) { return b }
+                        if case .bool(let b)? = p.defaultValue { return b }
+                        return false
                     },
-                    set: { set(p, choices[$0].value) })) {
-                    ForEach(choices.indices, id: \.self) { Text(choices[$0].label).tag($0) }
-                }.labelsHidden().fixedSize()
+                    set: { set(p, .bool($0)) })) { SceneMarkupView(markup: p.label) }
+            case .slider(let lo, let hi, _):
+                HStack(alignment: .center, spacing: 10) {
+                    SceneMarkupView(markup: p.label)
+                    Slider(value: Binding(
+                        get: {
+                            if case .number(let n)? = current(p) { return n }
+                            if case .number(let n)? = p.defaultValue { return n }
+                            return lo
+                        },
+                        set: { set(p, .number($0)) }), in: lo...hi)
+                    .frame(width: 120)
+                }
+            case .color:
+                ColorPicker(selection: Binding(
+                    get: {
+                        if case .color(let r, let g, let b)? = current(p) { return Color(red: r, green: g, blue: b) }
+                        if case .color(let r, let g, let b)? = p.defaultValue { return Color(red: r, green: g, blue: b) }
+                        return .white
+                    },
+                    set: { c in
+                        let n = NSColor(c).usingColorSpace(.sRGB) ?? .white
+                        set(p, .color(red: n.redComponent, green: n.greenComponent, blue: n.blueComponent))
+                    }), supportsOpacity: false) { SceneMarkupView(markup: p.label) }
+            case .text:
+                VStack(alignment: .leading, spacing: 6) {
+                    SceneMarkupView(markup: p.label)
+                    TextField("", text: Binding(
+                        get: {
+                            if case .string(let s)? = current(p) { return s }
+                            if case .string(let s)? = p.defaultValue { return s }
+                            return ""
+                        },
+                        set: { set(p, .string($0)) })).textFieldStyle(.roundedBorder)
+                }
+            case .combo(let choices):
+                HStack(alignment: .center, spacing: 10) {
+                    SceneMarkupView(markup: p.label)
+                    Spacer(minLength: 4)
+                    Picker("", selection: Binding<Int>(
+                        get: {
+                            if let v = current(p), let i = choices.firstIndex(where: { $0.value == v }) { return i }
+                            if let v = p.defaultValue, let i = choices.firstIndex(where: { $0.value == v }) { return i }
+                            return 0
+                        },
+                        set: { set(p, choices[$0].value) })) {
+                        ForEach(choices.indices, id: \.self) { Text(choices[$0].label).tag($0) }
+                    }.labelsHidden().fixedSize()
+                }
             }
         }
+    }
+}
+
+private extension SceneProperty.Kind {
+    var isGroup: Bool {
+        if case .group = self { return true }
+        return false
     }
 }
 

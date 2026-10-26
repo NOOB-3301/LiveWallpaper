@@ -15,9 +15,13 @@ let package = Package(
         .library(name: "Core", targets: ["Core"]),
         .library(name: "SceneFormat", targets: ["SceneFormat"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.11.0"),
+    ],
     targets: [
         .target(
             name: "Core",
+            dependencies: [.product(name: "SwiftSoup", package: "SwiftSoup")],
             path: "Sources/Core"
         ),
         .target(
