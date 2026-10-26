@@ -7,10 +7,12 @@ import PackageDescription
 //   SceneRendererFFI/SceneBridge         Rust + Metal scene renderer (SceneRenderer/, built by scripts/build-scene-renderer.sh)
 //   LiveWallpaperService    (executable) background service: menu bar, playback, lock screen, socket server
 //   LiveWallpaper           (executable) settings app, SwiftUI; Steam sign-in and Workshop downloads
-// Deployment target stays macOS 13 for every target: nothing in the scene engine needs newer API (SPEC3.md 0).
+// API floor macOS 14: the scroll and inspector APIs the UI uses are 14-only, so the pre-14 fallbacks are
+// gone. The install floor is higher — the Rust renderer compiles at MACOSX_DEPLOYMENT_TARGET=15.0, so the
+// plists say 15.0. (tools-version 5.9 has no `.macOS(.v15)`; raising it would flip every target to Swift 6.)
 let package = Package(
     name: "LiveWallpaper",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .library(name: "Core", targets: ["Core"]),
         .library(name: "SceneFormat", targets: ["SceneFormat"]),

@@ -185,7 +185,7 @@ Build order:
 
 `build.sh` runs `scripts/build-scene-renderer.sh` first (Rust stable, `MACOSX_DEPLOYMENT_TARGET=15.0`, `UNIVERSAL=1` merges an x86_64 slice with `lipo`), then builds the two Swift products. The renderer is a static library and uses only system frameworks, so nothing is bundled next to the service.
 
-`Package.swift` still declares macOS 13, and both `Resources/Info.plist` files still advertise `LSMinimumSystemVersion` 13.0. The renderer's 15.0 deployment target is why the documented minimum is macOS 15. Changing the plist values is a separate packaging change.
+`Package.swift` declares macOS 14, the API floor the UI is written against (`swift-tools-version 5.9` has no `.macOS(.v15)`, and raising the tools version would switch every target to Swift 6 language mode). Both `Resources/Info.plist` files advertise `LSMinimumSystemVersion` 15.0, the install floor: the renderer's 15.0 deployment target is what makes the documented minimum macOS 15, so the bundle must not claim lower.
 
 CI uses `macos-26` for build and release (its SDK has the Core Audio tap API).
 
