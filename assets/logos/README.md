@@ -1,7 +1,7 @@
 # App icon
 
-The app icon is a **corona arc** over a night horizon: one sweep of light across a star field, with a
-dark ridge at the bottom.
+The app icon is the same **wave mark** used on the website: three pale waves on a near-black squircle,
+with a blue signal dot above the top wave.
 
 ![app icon](app-icon.svg)
 
@@ -34,8 +34,8 @@ The renderer draws at 2x the requested points, so a 1024 px PNG is requested as 
 
 ## Tweaking
 
-- The arc is the `M -80 880 C …` path; the wide blurred copy behind it gives the halo, the sharp copy
-  in front gives the core. Shape them together.
-- `V-arc` is the gradient (mint -> blue -> violet). `V-sky` is the night sky, `V-star` the star glow.
-- The squircle is a superellipse (exponent 5) inscribed in the 1024 canvas; keep the artwork inside
-  it and avoid detail that disappears below 64 px.
+- The waves are the three `M166.4 …` paths. Their stroke width is `43.52`, with opacities `1`, `0.72`
+  and `0.45` from top to bottom.
+- The blue dot is the `#1d2bf2` circle at `803.84, 271.36` with radius `58.88`.
+- The tile is `#0b0b0d` inside a superellipse (exponent 5) inscribed in the 1024 canvas. Keep the
+  artwork inside it and avoid detail that disappears below 32 px.
