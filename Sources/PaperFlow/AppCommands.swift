@@ -45,7 +45,7 @@ struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") {
-                Task { await UpdateChecker.check(interactive: true) }
+                Task { await UpdateChecker.shared.check(interactive: true) }
             }
         }
 

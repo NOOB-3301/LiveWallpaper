@@ -38,7 +38,7 @@ struct PaperFlowApp: App {
             onImport: { SettingsModel.shared.addImported($0) },
             isInLibrary: { SettingsModel.shared.hasWorkshopItem($0) })
         SettingsModel.shared.bootstrap()
-        Task { await UpdateChecker.check(interactive: false) }
+        Task { await UpdateChecker.shared.check(interactive: false) }
         // `$downloads` fires before the value changes; the hop reads the settled state.
         downloadWatch = WorkshopModel.shared.$downloads.sink { [weak self] _ in
             Task { @MainActor [weak self] in self?.quitWhenDownloadsEnd() }
@@ -164,8 +164,11 @@ struct RootView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            ServiceFooter(model: model)
-                .padding(10)
+            VStack(spacing: 8) {
+                UpdateFooter(updates: .shared)
+                ServiceFooter(model: model)
+            }
+            .padding(10)
         }
     }
 
@@ -360,6 +363,66 @@ fileprivate struct BannerBar: View {
         }
         .padding(.horizontal, 18)
         .padding(.top, 10)
+    }
+}
+
+// MARK: - Update status
+
+/// Same card as the service status. A new version opens its release page; otherwise a click checks again.
+@MainActor
+private struct UpdateFooter: View {
+    @ObservedObject var updates: UpdateChecker
+
+    var body: some View {
+        Button {
+            if case .available(_, let url) = updates.status {
+                NSWorkspace.shared.open(url)
+            } else {
+                Task { await updates.check(interactive: false) }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                StatusDot(color: dot, pulsing: updates.status == .checking)
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(isAvailable ? .primary : .secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if isAvailable {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { glassShape(radius: 12) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(updates.status == .checking)
+        .help(isAvailable ? "Open the release page to download it" : "Check for updates again")
+    }
+
+    private var isAvailable: Bool {
+        if case .available = updates.status { return true }
+        return false
+    }
+
+    private var dot: Color {
+        switch updates.status {
+        case .checking: return .secondary
+        case .upToDate: return .green
+        case .available: return .accentColor
+        case .failed: return .orange
+        }
+    }
+
+    private var text: String {
+        switch updates.status {
+        case .checking: return "Checking for updates…"
+        case .upToDate: return "Already on the latest version · \(updates.currentVersion)"
+        case .available(let version, _): return "New version available · \(version)"
+        case .failed: return "Couldn’t check for updates"
+        }
     }
 }
 
