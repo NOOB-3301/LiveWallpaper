@@ -43,6 +43,12 @@ struct AppCommands: Commands {
     let model: SettingsModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                Task { await UpdateChecker.check(interactive: true) }
+            }
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("Import Wallpapers…") {
                 Task { @MainActor in _ = await ImportCenter.importWallpapers(model: model) }

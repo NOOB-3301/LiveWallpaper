@@ -60,6 +60,7 @@ private func observeStatus(of item: AVPlayerItem, changed: @escaping @Sendable (
     private var observers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
     private var wakeTask: Task<Void, Never>?
     private var releaseTask: Task<Void, Never>?
+    private var unlockTask: Task<Void, Never>?
     private var resumeTime: CMTime?  // where the released player was, for its replacement
     private var failureReported = false
     private var userPaused = false
@@ -86,6 +87,8 @@ private func observeStatus(of item: AVPlayerItem, changed: @escaping @Sendable (
         wakeTask = nil
         releaseTask?.cancel()
         releaseTask = nil
+        unlockTask?.cancel()
+        unlockTask = nil
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
         tearDownPlayer()
@@ -114,8 +117,34 @@ private func observeStatus(of item: AVPlayerItem, changed: @escaping @Sendable (
     }
 
     func setScreenLocked(_ locked: Bool) {
+        let wasLocked = screenLocked
         screenLocked = locked
+        if locked {
+            unlockTask?.cancel()
+            unlockTask = nil
+            applyPlayback()
+            return
+        }
+        // macOS doesn't reliably report the desktop windows as visible again after the lock screen,
+        // so a player released while covered never comes back and the desktop stays black. Rebuild
+        // the playback ourselves once the unlock has settled, like a fresh service start would.
+        if wasLocked, currentURL != nil {
+            unlockTask?.cancel()
+            unlockTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
+                guard let self, !self.screenLocked else { return }
+                self.unlockTask = nil
+                self.restartPlayback()
+            }
+        }
         applyPlayback()
+    }
+
+    private func restartPlayback() {
+        guard let url = currentURL else { return }
+        resumeTime = player?.currentTime() ?? resumeTime
+        startPlayer(for: url)  // the old player can stay black once its surface is gone
+        rebuildWindows()  // and the covered window's layer may have been discarded
     }
 
     // MARK: Windows

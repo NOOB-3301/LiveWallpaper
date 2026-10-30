@@ -381,15 +381,23 @@ private final class LockObserver: NSObject {
         lockObserver = LockObserver { [weak self] locked in self?.screenLockChanged(locked) }
     }
 
-    // The renderer wedges into a black screen on later locks unless restarted at unlock.
-    // That restart also picks up a file swapped while the screen was locked.
     private func screenLockChanged(_ locked: Bool) {
         isLocked = locked
         onScreenLock?(locked)
-        if !locked, !aerialSlots.isEmpty { Self.killall("WallpaperAerialsExtension") }
+        Self.killall(Self.processesToRestart(locked: locked, aerialInstalled: !aerialSlots.isEmpty))
     }
 
-    private static func killall(_ names: String...) {
+    // The renderer wedges into a black screen on later locks unless restarted at unlock.
+    // That restart also picks up a file swapped while the screen was locked. macOS 27's agent keeps
+    // talking to the killed extension (NSCocoaErrorDomain 4099, black lock screen), so the agent
+    // restarts too; launchd relaunches it and it starts a fresh extension.
+    static func processesToRestart(locked: Bool, aerialInstalled: Bool) -> [String] {
+        !locked && aerialInstalled ? ["WallpaperAerialsExtension", "WallpaperAgent"] : []
+    }
+
+    private static func killall(_ names: String...) { killall(names) }
+
+    private static func killall(_ names: [String]) {
         for name in names {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")

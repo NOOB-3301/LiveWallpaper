@@ -38,6 +38,7 @@ struct PaperFlowApp: App {
             onImport: { SettingsModel.shared.addImported($0) },
             isInLibrary: { SettingsModel.shared.hasWorkshopItem($0) })
         SettingsModel.shared.bootstrap()
+        Task { await UpdateChecker.check(interactive: false) }
         // `$downloads` fires before the value changes; the hop reads the settled state.
         downloadWatch = WorkshopModel.shared.$downloads.sink { [weak self] _ in
             Task { @MainActor [weak self] in self?.quitWhenDownloadsEnd() }
