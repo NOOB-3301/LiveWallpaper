@@ -72,5 +72,16 @@ let package = Package(
             dependencies: ["SceneFormat"],
             path: "Tests/SceneFormatTests"
         ),
+        // Swift Testing (not XCTest) so these also run with the Command Line Tools alone.
+        .testTarget(
+            name: "PaperFlowServiceTests",
+            dependencies: ["PaperFlowService"],
+            path: "Tests/PaperFlowServiceTests"
+        ),
+        .testTarget(
+            name: "PaperFlowTests",
+            dependencies: ["PaperFlow"],
+            path: "Tests/PaperFlowTests"
+        ),
     ]
 )

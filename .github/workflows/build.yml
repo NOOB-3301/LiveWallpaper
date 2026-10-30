@@ -85,7 +85,8 @@ jobs:
       - name: Swift build (release)
         run: swift build -c release
 
-      - name: Tests (Core and SceneFormat)
+      # Core and SceneFormat (XCTest), plus the service's lock screen and the app's preview player (Swift Testing).
+      - name: Tests
         run: swift test
 
       - name: Package app bundle
