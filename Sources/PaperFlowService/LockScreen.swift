@@ -61,7 +61,7 @@ private enum StillFiles {
     }
 }
 
-private enum AerialFiles {
+enum AerialFiles {
     static let temporaryPrefix = "livewallpaper-lockscreen-"
 
     private static let applicationSupport = FileManager.default
@@ -86,6 +86,20 @@ private enum AerialFiles {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: file)
         } else {
             try FileManager.default.moveItem(at: file, to: destination)
+        }
+    }
+
+    // macOS 27's aerial extension re-downloads an in-use video whose SourceURL attribute doesn't match
+    // its manifest, and the download overwrites the slot once it finishes (~60 s, e.g. during the screensaver).
+    static let downloadAttributes = ["SourceURL", "LastETag"]
+
+    static func copyDownloadAttributes(from source: URL, to destination: URL) {
+        for name in downloadAttributes {
+            let size = getxattr(source.path, name, nil, 0, 0, 0)
+            guard size > 0 else { continue }
+            var value = [UInt8](repeating: 0, count: size)
+            guard getxattr(source.path, name, &value, size, 0, 0) == size else { continue }
+            setxattr(destination.path, name, value, size, 0, 0)
         }
     }
 
@@ -302,14 +316,16 @@ private final class LockObserver: NSObject {
             for slot in slots where !fileManager.fileExists(atPath: AerialFiles.backup(slot).path) {
                 try fileManager.moveItem(at: AerialFiles.slot(slot), to: AerialFiles.backup(slot))
             }
-            let first = AerialFiles.slot(slots[0])
-            try AerialFiles.place(file, at: first)
-            // The other slots are hard links to the first, so they take no extra disk space.
+            // Each slot gets its own clone (no extra disk space on APFS) carrying its original's
+            // download attributes; hard links would share one SourceURL across slots.
             for slot in slots.dropFirst() {
                 let copy = AerialFiles.newTemporaryFile()
-                do { try fileManager.linkItem(at: first, to: copy) } catch { try fileManager.copyItem(at: first, to: copy) }
+                try fileManager.copyItem(at: file, to: copy)
+                AerialFiles.copyDownloadAttributes(from: AerialFiles.backup(slot), to: copy)
                 try AerialFiles.place(copy, at: AerialFiles.slot(slot))
             }
+            AerialFiles.copyDownloadAttributes(from: AerialFiles.backup(slots[0]), to: file)
+            try AerialFiles.place(file, at: AerialFiles.slot(slots[0]))
         } catch let error as LockScreenError {
             throw error
         } catch {
