@@ -1234,20 +1234,27 @@ final class PreviewPlayer: ObservableObject {
             return
         }
         self.url = url
-        player?.pause()
-        looper = nil
-        player = nil
-        guard let url else { return }
-        let queue = AVQueuePlayer()
-        queue.isMuted = true
-        looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
-        player = queue
+        release()
         setActive(isActive)
     }
 
+    // A paused player still holds its decoder (hundreds of MB for a 4K video), so a hidden preview drops it.
     func setActive(_ active: Bool) {
         isActive = active
-        if active { player?.play() } else { player?.pause() }
+        guard active else { return release() }
+        if player == nil, let url {
+            let queue = AVQueuePlayer()
+            queue.isMuted = true
+            looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
+            player = queue
+        }
+        player?.play()
+    }
+
+    private func release() {
+        player?.pause()
+        looper = nil
+        player = nil
     }
 }
 
