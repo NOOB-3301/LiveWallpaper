@@ -14,7 +14,7 @@
 
 PaperFlow is a free, open-source (MIT) live wallpaper app for Apple silicon. Download wallpapers from the **Steam Workshop** with your own Steam account, or drop in your own videos. Set them on the desktop and the lock screen (macOS 26+), and rotate through a playlist on a timer. Scenes are drawn by our own Rust + Metal renderer that sleeps when nothing is moving, so it stays light on battery.
 
-[Download](../../releases) · [Wallpaper Engine on Mac guide](docs/wallpaper-engine-on-mac.md) · [FAQ](#faq) · [Architecture](ARCHITECTURE.md)
+[Website](https://paperflowmac.vercel.app/) · [Download](https://github.com/NOOB-3301/LiveWallpaper/releases/latest) · [Wallpaper Engine on Mac](https://paperflowmac.vercel.app/wallpaper-engine-on-mac) · [Live lock screen](https://paperflowmac.vercel.app/live-lock-screen) · [Video vs scene](https://paperflowmac.vercel.app/animated-wallpaper-vs-video) · [FAQ](#faq) · [Architecture](ARCHITECTURE.md)
 
 If PaperFlow earns a place on your desktop, a ⭐ helps other Mac users find it.
 
@@ -152,7 +152,7 @@ Two processes: the SwiftUI **PaperFlow** (Settings) app, which plays nothing, an
 
 ## FAQ
 
-**Does Wallpaper Engine work on Mac?** Not officially. PaperFlow is a native alternative that plays Wallpaper Engine *video* and *scene* wallpapers natively on macOS. Web and application wallpapers are not supported. See the [Wallpaper Engine on Mac guide](docs/wallpaper-engine-on-mac.md).
+**Does Wallpaper Engine work on Mac?** Not officially. PaperFlow is a native alternative that plays Wallpaper Engine *video* and *scene* wallpapers natively on macOS. Web and application wallpapers are not supported. See the [Wallpaper Engine on Mac guide](https://paperflowmac.vercel.app/wallpaper-engine-on-mac).
 
 **Do I need Wallpaper Engine or Steam?** Local videos need neither. Workshop downloads use Valve's SteamCMD with your own Steam account, and the Steam Setup page walks you through it.
 
