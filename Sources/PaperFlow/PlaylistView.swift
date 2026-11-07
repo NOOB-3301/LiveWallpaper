@@ -42,11 +42,7 @@ private struct PlaylistSegmentedControl: View {
             segment(.lock, title: "Lock Screen", icon: "lock.display")
         }
         .padding(4)
-        .background {
-            Capsule()
-                .fill(.regularMaterial)
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-        }
+        .lwGlass()
         .fixedSize()
     }
 
@@ -415,13 +411,12 @@ private struct PlaylistAddSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .lwProminentButton()
                 .disabled(selected.isEmpty)
             }
             .padding(14)
         }
         .frame(width: 500, height: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func candidateRow(_ item: VideoItem) -> some View {

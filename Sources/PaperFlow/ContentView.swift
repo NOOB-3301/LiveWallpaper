@@ -256,6 +256,24 @@ struct LibraryView: View {
     /// The hero lives outside the scroller. It carries a layer-backed `AVPlayerView`, and taking it out of the
     /// lazy grid's layout pass is most of why the page felt heavy — only the cards scroll now.
     private func gallery(_ plan: Plan) -> some View {
+        ZStack {
+            // One dark backdrop for the whole page; the preview is a tile on it. The extension mirrors what the page
+            // shows at its edge, so anything bright reaching that edge splits the sidebar and inspector glass in two
+            // colours. Blurred because Workshop scene previews can be 192px GIFs.
+            if let item = plan.focused {
+                ItemThumbnail(item: item, broken: plan.isBroken(item.id), showsHoverPreview: false, cornerRadius: 0)
+                    .blur(radius: 40, opaque: true)
+                    .overlay(Color.black.opacity(0.55))
+                    .lwBackgroundExtension()
+                    .id(item.id)   // else it shows the last wallpaper's picture until this one decodes
+            }
+            galleryColumn(plan)
+        }
+        // The hero runs under the toolbar. Without one, the grid must stay clear of it.
+        .ignoresSafeArea(.container, edges: plan.focused == nil ? [] : .top)
+    }
+
+    private func galleryColumn(_ plan: Plan) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if let item = plan.focused {
                 LibraryHero(model: model, item: item, broken: plan.isBroken(item.id),
@@ -264,7 +282,6 @@ struct LibraryView: View {
                             remove: { remove([item.id]) })
                     .id(item.id)
                     .transition(.opacity)
-                    .padding(LWTheme.contentPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             ScrollView {
@@ -284,7 +301,7 @@ struct LibraryView: View {
                         .font(.callout.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .lwGlass()
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -493,21 +510,9 @@ private struct LibraryHero: View {
     private var isPlaying: Bool { model.isPlaying(item.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottom) {
-                ItemPreviewPane(item: item, broken: broken, openSteamSetup: openSteamSetup, showsNotes: false)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16 / 9, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: LWTheme.panelRadius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: LWTheme.panelRadius, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                    }
-
-                LinearGradient(colors: [.clear, .black.opacity(0.42)],
-                               startPoint: .center, endPoint: .bottom)
-                    .allowsHitTesting(false)
-                    .clipShape(RoundedRectangle(cornerRadius: LWTheme.panelRadius, style: .continuous))
+                ItemPreviewPane(item: item, broken: broken, openSteamSetup: openSteamSetup, showsNotes: false, fills: true)
 
                 HStack(alignment: .bottom, spacing: 10) {
                     if !playing.isEmpty {
@@ -519,13 +524,16 @@ private struct LibraryHero: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .lwGlass(clear: true)
                     }
                     Spacer()
                     transport
                 }
-                .padding(12)
+                .padding(16)
             }
+            // A share of the window, not an aspect ratio: 16:9 at this width would leave the grid no room.
+            .containerRelativeFrame(.vertical) { height, _ in height * 0.5 }
+            .frame(maxWidth: .infinity)
 
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -554,6 +562,8 @@ private struct LibraryHero: View {
                     } label: {
                         Label("Set as", systemImage: "rectangle.on.rectangle.angled")
                     }
+                    .menuStyle(.button)
+                    .lwGlassButton()
                     .fixedSize()
 
                     Button {
@@ -563,17 +573,18 @@ private struct LibraryHero: View {
                         Label(isPlaying ? "Stop" : "Play",
                               systemImage: isPlaying ? "stop.fill" : "play.fill")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .lwProminentButton()
                     .tint(isPlaying ? .red : nil)
                 }
                 .controlSize(.large)
             }
+            .padding(.horizontal, LWTheme.contentPadding)
+            .padding(.vertical, 18)
         }
     }
 
     private var transport: some View {
-        GlassPanel(radius: 13) {
-            HStack(spacing: 2) {
+        HStack(spacing: 2) {
                 iconButton(isPlaying ? "stop.fill" : "play.fill",
                            help: isPlaying ? "Stop wallpaper" : "Play wallpaper") {
                     model.clearStatus()
@@ -590,9 +601,10 @@ private struct LibraryHero: View {
                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                 }
                 iconButton("trash", help: "Remove from library") { remove() }
-            }
-            .padding(4)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .lwGlass(clear: true)
         .fixedSize()
     }
 
@@ -658,7 +670,7 @@ private struct LibraryCard: View {
                         ForEach(WallpaperTarget.allCases) { target in
                             if roles.contains(target) {
                                 LWChip(text: target == .desktop ? "Desktop" : "Lock",
-                                       tint: .accentColor,
+                                       tint: playing.contains(target) ? .accentColor : .white,
                                        filled: playing.contains(target),
                                        icon: playing.contains(target) ? "waveform" : nil)
                             }
@@ -700,7 +712,7 @@ private struct LibraryCard: View {
                             .fixedSize()
                         }
                         .padding(4)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .lwGlass(clear: true)
                         .padding(8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -974,7 +986,7 @@ struct LibraryInspectorView: View {
             } label: {
                 Label("Remove from library", systemImage: "trash")
             }
-            .buttonStyle(.bordered)
+            .lwGlassButton()
             .tint(.red)
             .controlSize(.small)
         }
@@ -1260,10 +1272,12 @@ final class PreviewPlayer: ObservableObject {
 
 struct PlayerSurface: NSViewRepresentable {
     let player: AVPlayer?
+    var fills = false
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .none
+        view.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         return view
     }
 
@@ -1275,14 +1289,17 @@ struct ItemPreviewPane: View {
     let broken: Bool
     let openSteamSetup: () -> Void
     var showsNotes = true
+    var fills = false   // the hero: a tile on the page backdrop, with no letterbox of its own
     @StateObject private var preview = PreviewPlayer()
     @State private var sceneImage: NSImage?
 
-    init(item: VideoItem?, broken: Bool, openSteamSetup: @escaping () -> Void, showsNotes: Bool = true) {
+    init(item: VideoItem?, broken: Bool, openSteamSetup: @escaping () -> Void, showsNotes: Bool = true,
+         fills: Bool = false) {
         self.item = item
         self.broken = broken
         self.openSteamSetup = openSteamSetup
         self.showsNotes = showsNotes
+        self.fills = fills
     }
 
     private var playbackURL: URL? { broken || item?.isScene == true ? nil : item?.url }
@@ -1295,9 +1312,12 @@ struct ItemPreviewPane: View {
     }
 
     private var stage: some View {
-        MediaStage(item: item, broken: broken, preview: preview, sceneImage: sceneImage)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .frame(maxWidth: .infinity)
+        Group {
+            let media = MediaStage(item: item, broken: broken, preview: preview, sceneImage: sceneImage, fills: fills)
+            // Not `aspectRatio(nil)` for the hero: that asks for the ideal size, and an AppKit view's is about 10pt.
+            if fills { media } else { media.aspectRatio(16 / 9, contentMode: .fit) }
+        }
+            .frame(maxWidth: .infinity, maxHeight: fills ? .infinity : nil)
             .task(id: playbackURL) { preview.load(playbackURL) }
             .task(id: item?.previewPath) {
                 guard let path = item?.previewPath else { sceneImage = nil; return }
@@ -1321,16 +1341,18 @@ private struct MediaStage: View {
     let broken: Bool
     @ObservedObject var preview: PreviewPlayer
     let sceneImage: NSImage?
+    var fills = false
 
     var body: some View {
         ZStack {
-            Color.black
+            if !fills { Color.black }
             content
         }
         .overlay(alignment: .topLeading) {
-            if let info = item?.scene { SceneSupportBadge(info: info).padding(9) }
+            // The hero shows this badge beside the title; up here it would sit under the toolbar.
+            if !fills, let info = item?.scene { SceneSupportBadge(info: info).padding(9) }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: fills ? 0 : 14, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(item.map { "Preview of \($0.name)" } ?? "No wallpaper selected")
     }
@@ -1348,13 +1370,38 @@ private struct MediaStage: View {
             .foregroundStyle(.white)
         } else if let item {
             if item.isScene {
-                if let sceneImage {
+                if fills {
+                    if let sceneImage {
+                        // Capped at the image's own size, so a small preview stays sharp instead of filling the hero.
+                        AnimatedImageView(image: sceneImage)
+                            .aspectRatio(sceneImage.size, contentMode: .fit)
+                            .frame(maxWidth: sceneImage.size.width, maxHeight: sceneImage.size.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            // On a shape: a shadow on the AppKit view itself comes out as a clipped box.
+                            .background {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(.black)
+                                    .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
+                            }
+                            .padding(.top, 56)      // clear of the toolbar
+                            .padding(.bottom, 20)
+                            .frame(maxWidth: .infinity)   // else the stage's clip cuts the shadow at the tile's sides
+                    }
+                } else if let sceneImage {
                     AnimatedImageView(image: sceneImage)
                 } else {
                     Image(systemName: "photo").font(.system(size: 30)).foregroundStyle(.tertiary)
                 }
             } else {
-                PlayerSurface(player: preview.player)
+                if fills {
+                    PlayerSurface(player: preview.player, fills: true)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .padding(.top, 56)      // clear of the toolbar
+                        .padding(.bottom, 20)
+                } else {
+                    PlayerSurface(player: preview.player)
+                }
             }
         } else {
             VStack(spacing: 8) {

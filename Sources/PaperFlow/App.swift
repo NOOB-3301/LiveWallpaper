@@ -34,6 +34,7 @@ struct PaperFlowApp: App {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if yieldToRunningSettings() { return }
+        NSApp.appearance = NSAppearance(named: .darkAqua)   // the app is dark only, whatever the system is set to
         WorkshopModel.shared.connect(
             onImport: { SettingsModel.shared.addImported($0) },
             isInLibrary: { SettingsModel.shared.hasWorkshopItem($0) })
@@ -135,7 +136,8 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 208, ideal: LWTheme.sidebarWidth, max: 300)
+                // The minimum is the ideal: macOS restores a saved width, which would otherwise win over a new default.
+                .navigationSplitViewColumnWidth(min: LWTheme.sidebarWidth, ideal: LWTheme.sidebarWidth, max: 400)
         } detail: {
             detail
         }
@@ -219,9 +221,10 @@ struct RootView: View {
             content
                 .transition(.opacity)
         }
-        .background(LWBackground())
+        .background(LWTheme.background)
         .animation(LWMotion.content, value: selection)
         .animation(LWMotion.content, value: banner?.text)
+        .toolbarBackground(.hidden, for: .windowToolbar)   // the hero runs under it; a bar would cut across the picture
         .toolbar {
             if selection.isLibrary {
                 ToolbarItem(placement: .primaryAction) {
@@ -247,15 +250,7 @@ struct RootView: View {
                             Text("\(workshop.activeDownloadCount)")
                                 .font(.caption.weight(.semibold).monospacedDigit())
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background {
-                            Capsule()
-                                .fill(.regularMaterial)
-                                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-                        }
                     }
-                    .buttonStyle(.plain)
                     .help("Downloads in progress")
                     .accessibilityLabel("Downloads in progress")
                 }
@@ -382,7 +377,9 @@ private struct UpdateFooter: View {
             }
         } label: {
             HStack(spacing: 7) {
-                StatusDot(color: dot, pulsing: updates.status == .checking)
+                if !isAvailable {   // the arrow at the end of the row says it; a second blue mark reads as stray
+                    StatusDot(color: dot, pulsing: updates.status == .checking)
+                }
                 Text(text)
                     .font(.caption)
                     .foregroundStyle(isAvailable ? .primary : .secondary)
@@ -394,7 +391,7 @@ private struct UpdateFooter: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background { glassShape(radius: 12) }
+            .background { glassShape(radius: 12, fill: Color.primary.opacity(0.06)) }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -463,13 +460,13 @@ private struct ServiceFooter: View {
                     model.clearStatus()
                     if model.isRunning { model.stop() } else { model.start() }
                 }
-                .buttonStyle(.bordered)
+                .lwGlassButton()
                 .controlSize(.small)
                 .disabled(!model.isRunning && !model.canStart)
             }
         }
         .padding(10)
-        .background { glassShape(radius: 12) }
+        .background { glassShape(radius: 12, fill: Color.primary.opacity(0.06)) }
     }
 
     private var dot: Color {
@@ -508,15 +505,7 @@ struct ServiceStatusPill: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background {
-                Capsule()
-                    .fill(.regularMaterial)
-                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 1))
-            }
         }
-        .buttonStyle(.plain)
         .help("Wallpaper service status and controls")
         .popover(isPresented: $showing, arrowEdge: .bottom) {
             ServicePopover(model: model)
@@ -571,7 +560,7 @@ private struct ServicePopover: View {
                     model.clearStatus()
                     model.isRunning ? model.stop() : model.start()
                 }
-                .buttonStyle(.borderedProminent)
+                .lwProminentButton()
                 .disabled(!model.isRunning && !model.canStart)
 
                 Toggle("Mute", isOn: $model.muted)

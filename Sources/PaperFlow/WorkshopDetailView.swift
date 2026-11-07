@@ -146,7 +146,7 @@ struct WorkshopDetailView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(LWTheme.background)
         .task(id: item.id) { await preview.load(item.previewURL) }
     }
 

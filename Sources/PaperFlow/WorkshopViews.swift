@@ -223,7 +223,7 @@ struct WorkshopCardActions: View {
             Button { workshop.download(item) } label: {
                 Label("Download" + size, systemImage: "arrow.down.circle")
             }
-            .buttonStyle(.borderedProminent)
+            .lwProminentButton()
             .disabled(!ready)
             .help(ready ? "" : WorkshopCardActions.setupFirst)
         }
@@ -436,11 +436,7 @@ struct WorkshopView: View {
                 }
                 .padding(.horizontal, 11)
                 .padding(.vertical, 6)
-                .background {
-                    Capsule()
-                        .fill(.regularMaterial)
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-                }
+                .lwGlass()
             }
             .buttonStyle(.plain)
             .help("Open Downloads")
@@ -488,7 +484,7 @@ struct WorkshopView: View {
                 .help("Paste from the clipboard")
                 .accessibilityLabel("Paste from the clipboard")
                 Button("Look Up") { workshop.lookUp() }
-                    .buttonStyle(.borderedProminent)
+                    .lwProminentButton()
                     .keyboardShortcut(.defaultAction)
                     .disabled(workshop.pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -700,7 +696,7 @@ struct WorkshopView: View {
             } label: {
                 Label("Load More", systemImage: "chevron.down")
             }
-            .buttonStyle(.bordered)
+            .lwGlassButton()
             .frame(maxWidth: .infinity)
         }
     }

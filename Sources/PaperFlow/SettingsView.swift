@@ -25,7 +25,7 @@ struct PlaybackSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 520, height: 660)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(LWTheme.background)
     }
 
     private var about: some View {

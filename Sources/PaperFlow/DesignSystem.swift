@@ -6,9 +6,12 @@ import Core
 // The shared visual language for the Settings app. Keep every custom colour, radius, curve and
 // reusable surface here so the library, Workshop and Steam Setup feel like one product.
 //
-// The look: soft ambient colour behind everything, translucent "liquid glass" surfaces on top with a
-// light-catching top edge, one accent gradient used sparingly, and quiet typography that leans on
-// weight and spacing. Materials respect Reduce Transparency; every animation respects Reduce Motion.
+// The look: dark only, after Apple's Landmarks sample. The wallpaper is the content: it runs under the toolbar and
+// the glass floats over it. The sidebar and inspector take its tint over their full height. Elsewhere one near-black
+// colour, no gradients.
+// Real Liquid Glass is for the control layer only: sidebar, toolbar, transport, buttons, search. Content
+// cards are a solid fill, so a scrolling grid never samples a live backdrop. One accent gradient used
+// sparingly, quiet typography. Reduce Transparency flattens the glass; animations respect Reduce Motion.
 
 // MARK: - Tokens
 
@@ -16,31 +19,16 @@ enum LWTheme {
     static let contentPadding: CGFloat = 28
     static let cardRadius: CGFloat = 18
     static let panelRadius: CGFloat = 22
-    static let sidebarWidth: CGFloat = 236
-    static let inspectorWidth: CGFloat = 330
+    static let sidebarWidth: CGFloat = 330
+    static let inspectorWidth: CGFloat = 380
     static let gridSpacing: CGFloat = 20
     static let cardMinWidth: CGFloat = 252
     static let sectionSpacing: CGFloat = 26
 
-    /// Hairline used on every glass edge: a light top and a shadowed bottom, in one pass.
-    static let edgeGradient = LinearGradient(
-        stops: [
-            .init(color: .white.opacity(0.28), location: 0),
-            .init(color: .white.opacity(0.04), location: 0.35),
-            .init(color: .black.opacity(0.10), location: 1),
-        ],
-        startPoint: .top, endPoint: .bottom)
+    static let background = Color(white: 0.04)
 
-    /// The content surface. At 88% the ambient field reads through a card without the card becoming a live
-    /// backdrop sample; Reduce Transparency flattens it to the solid control colour, like `GlassPanel`.
-    static let surfaceCard = Color(nsColor: NSColor(name: NSColor.Name("LWSurfaceCard")) { _ in
-        let base = NSColor.controlBackgroundColor
-        return NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-            ? base : base.withAlphaComponent(0.88)
-    })
-
-    static let washCool = ambientWash(hue: 212, saturation: 0.55, darkBrightness: 0.45, lightBrightness: 0.55)
-    static let washWarm = ambientWash(hue: 265, saturation: 0.42, darkBrightness: 0.50, lightBrightness: 0.60)
+    /// The content surface. Solid, so it costs nothing while the grid scrolls.
+    static let surfaceCard = Color(white: 0.11)
 
     /// The light-catching top edge every raised surface shares. White over the fill, so it never changes
     /// the fill's contrast with the text on it.
@@ -51,19 +39,6 @@ enum LWTheme {
     /// never a card fill: a translucent accent behind white glyph text fails contrast in light mode.
     static let accentFlow = LinearGradient(colors: [Color.accentColor.opacity(0.9), Color.accentColor.opacity(0.45)],
                                            startPoint: .topLeading, endPoint: .bottomTrailing)
-
-    /// At 5-13% alpha over the window colour this is a hint of colour, not a wash you look at. Light mode
-    /// sits lower so `Color.primary` text keeps its contrast.
-    private static func ambientWash(hue: CGFloat, saturation: CGFloat,
-                                    darkBrightness: CGFloat, lightBrightness: CGFloat) -> Color {
-        let name = NSColor.Name("LWWash\(Int(hue))")
-        return Color(nsColor: NSColor(name: name) { appearance in
-            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            return NSColor(hue: hue / 360, saturation: saturation,
-                           brightness: dark ? darkBrightness : lightBrightness,
-                           alpha: dark ? 0.13 : 0.05)
-        })
-    }
 }
 
 enum LWMotion {
@@ -74,37 +49,9 @@ enum LWMotion {
     static let success = Animation.spring(response: 0.36, dampingFraction: 0.72)
 }
 
-// MARK: - Ambient background
-
-/// The field every page sits on: the window colour plus two fixed, still washes. Blur is baked into the
-/// gradient stops — no `.blur` and no `NSVisualEffectView`, which would sample the live backdrop and
-/// re-rasterise on every scroll frame. Sits behind the scroller, so scrolling is a transform over a cached layer.
-struct LWBackground: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    var body: some View {
-        Color(nsColor: .windowBackgroundColor)
-            .overlay {
-                if !reduceTransparency {
-                    LWTheme.washCool.ambientWash(from: UnitPoint(x: 0.15, y: 0.08))
-                    LWTheme.washWarm.ambientWash(from: UnitPoint(x: 0.88, y: 0.95))
-                }
-            }
-            .ignoresSafeArea()
-    }
-}
-
-private extension Color {
-    func ambientWash(from center: UnitPoint) -> some View {
-        EllipticalGradient(gradient: Gradient(colors: [self, self.opacity(0)]),
-                           center: center, startRadiusFraction: 0, endRadiusFraction: 0.9)
-    }
-}
-
 // MARK: - Surfaces
 
-/// The content surface: a translucent card with a light-catching top edge and a soft shadow. This is the
-/// app's glass — solid fill when the user asked for reduced transparency.
+/// The content surface: a flat card.
 struct LWCard<Content: View>: View {
     var padding: CGFloat = 16
     var radius: CGFloat = LWTheme.cardRadius
@@ -119,17 +66,13 @@ struct LWCard<Content: View>: View {
     }
 }
 
-/// One surface shape used by cards, banners and rows: tinted fill, top sheen, gradient hairline, shadow.
+/// One surface shape used by cards, banners and rows: flat fill and a hairline.
 @ViewBuilder
 func glassShape(radius: CGFloat, cornerStyle: RoundedCornerStyle = .continuous,
                 fill: some ShapeStyle = AnyShapeStyle(LWTheme.surfaceCard)) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: cornerStyle)
-    ZStack {
-        shape.fill(fill)
-        LWTheme.topSheen.clipShape(shape)
-    }
-    .overlay(shape.strokeBorder(LWTheme.edgeGradient, lineWidth: 1))
-    .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
+    shape.fill(fill)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
 }
 
 extension View {
@@ -141,28 +84,47 @@ extension View {
     }
 }
 
-/// Floating glass for the navigation/transport layer only (hero controls, status popover, pills).
+/// Floating glass for the control layer only (transport, pills, search), never for content.
 /// On macOS 26 this is real Liquid Glass; earlier systems get a quiet material fallback.
-struct GlassPanel<Content: View>: View {
-    var radius: CGFloat = 18
-    @ViewBuilder var content: Content
+private struct LWGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let clear: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    @ViewBuilder var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    func body(content: Content) -> some View {
         if #available(macOS 26.0, *), !reduceTransparency {
-            content
-                .glassEffect(.regular, in: shape)
+            content.glassEffect(clear ? .clear : .regular, in: shape)
         } else {
             content
                 .background(reduceTransparency
                             ? AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
                             : AnyShapeStyle(.ultraThinMaterial),
                             in: shape)
-                .overlay {
-                    shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                }
+                .overlay { shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 1) }
         }
+    }
+}
+
+extension View {
+    /// `clear` is for controls over a wallpaper only: Apple keeps it for visually rich backgrounds.
+    func lwGlass(in shape: some InsettableShape = Capsule(), clear: Bool = false) -> some View {
+        modifier(LWGlass(shape: shape, clear: clear))
+    }
+
+    /// Mirrors and blurs the view under the sidebar and inspector. One per page, on a still: it re-renders
+    /// whatever it extends, so a playing video must not go through it.
+    @ViewBuilder func lwBackgroundExtension() -> some View {
+        if #available(macOS 26.0, *) { backgroundExtensionEffect() } else { self }
+    }
+
+    /// The primary action of a page or sheet.
+    @ViewBuilder func lwProminentButton() -> some View {
+        if #available(macOS 26.0, *) { buttonStyle(.glassProminent) } else { buttonStyle(.borderedProminent) }
+    }
+
+    /// A secondary action. Not for cells of a scrolling grid: that is content, and each would be a glass layer.
+    @ViewBuilder func lwGlassButton() -> some View {
+        if #available(macOS 26.0, *) { buttonStyle(.glass) } else { buttonStyle(.bordered) }
     }
 }
 
@@ -210,12 +172,10 @@ struct InspectorSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.8)
-                    .foregroundStyle(.tertiary)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
                 if let subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(.tertiary)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }
             }
             content
@@ -277,7 +237,7 @@ struct LWTopicChip: View {
                             .overlay(Capsule().fill(LWTheme.topSheen))
                     } else {
                         Capsule()
-                            .fill(.regularMaterial)
+                            .fill(LWTheme.surfaceCard)
                             .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
                     }
                 }
@@ -302,12 +262,14 @@ struct StatusDot: View {
             .frame(width: 7, height: 7)
             .overlay {
                 if pulsing {
+                    // Scoped to these two modifiers: a repeating `.animation(_:value:)` on the dot also caught
+                    // its position while the sidebar laid out, and the dot drifted across the window for good.
                     Circle().stroke(color.opacity(0.45), lineWidth: 1)
-                        .scaleEffect(on ? 2.1 : 0.9)
-                        .opacity(on ? 0 : 1)
+                        .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                            $0.scaleEffect(on ? 2.1 : 0.9).opacity(on ? 0 : 1)
+                        }
                 }
             }
-            .animation(pulsing ? .easeOut(duration: 1.2).repeatForever(autoreverses: false) : .default, value: on)
             .onAppear { on = pulsing }
             .onChange(of: pulsing) { _, isOn in on = isOn }
     }
@@ -431,11 +393,7 @@ struct LWSearchField: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
-        .background {
-            Capsule()
-                .fill(.regularMaterial)
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-        }
+        .lwGlass()
         .frame(maxWidth: 260)
     }
 }
@@ -449,7 +407,7 @@ extension View {
                                       @ViewBuilder inspector: @escaping () -> Inspector) -> some View {
         self.inspector(isPresented: isPresented) {
             inspector()
-                .inspectorColumnWidth(min: 280, ideal: LWTheme.inspectorWidth, max: 380)
+                .inspectorColumnWidth(min: 320, ideal: LWTheme.inspectorWidth, max: 440)
         }
     }
 
@@ -571,9 +529,12 @@ struct ItemThumbnail: View {
                 }
                 .foregroundStyle(.orange)
             } else if let image {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .scaledToFill()
+                // In an overlay, so a fill image of another aspect can't grow the frame past the cell's 16:9.
+                Color.clear.overlay {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                }
             } else {
                 Image(systemName: item.isScene ? "photo" : "film")
                     .font(.system(size: 20))
@@ -700,12 +661,12 @@ struct LWEmptyState: View {
             HStack(spacing: 10) {
                 if let actionTitle, let action {
                     Button(actionTitle, action: action)
-                        .buttonStyle(.borderedProminent)
+                        .lwProminentButton()
                         .controlSize(.large)
                 }
                 if let secondaryTitle, let secondaryAction {
                     Button(secondaryTitle, action: secondaryAction)
-                        .buttonStyle(.bordered)
+                        .lwGlassButton()
                         .controlSize(.large)
                 }
             }

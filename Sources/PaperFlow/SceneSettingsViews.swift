@@ -117,7 +117,7 @@ struct SceneSettingsCard: View {
                 HStack {
                     Spacer()
                     Button("Reset", action: reset)
-                        .buttonStyle(.bordered)
+                        .lwGlassButton()
                         .controlSize(.small)
                         .disabled(isDefault)
                         .help("Put every setting of this scene back to its default.")

@@ -324,7 +324,7 @@ private struct ToolsContent: View {
                 Text("PaperFlow downloads Steam’s official command-line tool (SteamCMD, about 3 MB) from Valve. It is used only to download wallpapers you ask for, with your own Steam account.")
                     .foregroundStyle(.secondary)
                 Button("Install Steam tools") { setup.installTools() }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .lwProminentButton().keyboardShortcut(.defaultAction)
             }
         case .installing(let step):
             InstallProgress(step: step, cancel: { setup.cancelInstall() })
@@ -389,7 +389,7 @@ private struct RosettaContent: View {
             Link("Read Apple’s license", destination: URL(string: "https://www.apple.com/legal/sla/")!).font(.callout)
             HStack {
                 Button("Install Rosetta", action: setup.installRosetta)
-                    .buttonStyle(.borderedProminent)
+                    .lwProminentButton()
                     .disabled(setup.rosettaInstalling)
                 if setup.rosettaInstalling {
                     ProgressView().controlSize(.small)
@@ -444,7 +444,7 @@ private struct SignInForm: View {
             SecureField("Password", text: $password)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: 320).onSubmit(submit)
             Button("Sign in", action: submit)
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .lwProminentButton().keyboardShortcut(.defaultAction)
                 .disabled(name.isEmpty || password.isEmpty)
             Text("Your password goes straight to Valve’s tool and is never stored.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -520,7 +520,7 @@ private struct GuardCodeForm: View {
                 .frame(maxWidth: 160).disableAutocorrection(true).onSubmit(submit)
             HStack {
                 Button("Continue", action: submit)
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(trimmed.isEmpty)
+                    .lwProminentButton().keyboardShortcut(.defaultAction).disabled(trimmed.isEmpty)
                 Button("Cancel") { setup.cancelSignIn() }
             }
         }
@@ -592,7 +592,7 @@ private struct OwnershipContent: View {
         case .unknown:
             VStack(alignment: .leading, spacing: 8) {
                 Text("Make sure this account owns Wallpaper Engine.").foregroundStyle(.secondary)
-                Button("Check Wallpaper Engine", action: recheck).buttonStyle(.borderedProminent)
+                Button("Check Wallpaper Engine", action: recheck).lwProminentButton()
             }
         case .checking:
             BusyLine(text: "Checking Wallpaper Engine…")
@@ -612,7 +612,7 @@ private struct OwnershipContent: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(reason).foregroundStyle(.secondary)
                 HStack {
-                    Button("Continue anyway", action: continueAnyway).buttonStyle(.borderedProminent)
+                    Button("Continue anyway", action: continueAnyway).lwProminentButton()
                     Button("Check again", action: recheck)
                 }
             }
@@ -682,7 +682,7 @@ private struct SharedFilesCard: View {
             Text(boldName("Steam will download about ", ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file),
                           " of Wallpaper Engine files to your Mac, keep the shared scene files and delete the rest. Continue?"))
             HStack {
-                Button("Continue") { setup.confirmSharedAssets() }.buttonStyle(.borderedProminent)
+                Button("Continue") { setup.confirmSharedAssets() }.lwProminentButton()
                 Button("Not now") { declined = true }
             }
         }
