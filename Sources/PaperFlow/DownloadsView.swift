@@ -12,10 +12,13 @@ struct DownloadsView: View {
     @ObservedObject var workshop: WorkshopModel
     let openLibrary: () -> Void
     let openWorkshop: () -> Void
+    @State private var sizeFilter: WorkshopSizeFilter = .all
 
     private var entries: [WorkshopDownloadEntry] { workshop.downloadEntries }
     private var active: [WorkshopDownloadEntry] { entries.filter(\.phase.isActive) }
     private var settled: [WorkshopDownloadEntry] { entries.filter { !$0.phase.isActive } }
+    private var shownActive: [WorkshopDownloadEntry] { active.filter { sizeFilter.matches($0.item.sizeBytes) } }
+    private var shownSettled: [WorkshopDownloadEntry] { settled.filter { sizeFilter.matches($0.item.sizeBytes) } }
 
     var body: some View {
         ScrollView {
@@ -24,8 +27,11 @@ struct DownloadsView: View {
                 if entries.isEmpty {
                     emptyState
                 } else {
-                    if !active.isEmpty { activeSection }
-                    if !settled.isEmpty { settledSection }
+                    if !shownActive.isEmpty { activeSection }
+                    if !shownSettled.isEmpty { settledSection }
+                    if shownActive.isEmpty && shownSettled.isEmpty {
+                        Text("No downloads of this size.").font(.callout).foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(LWTheme.contentPadding)
@@ -42,11 +48,14 @@ struct DownloadsView: View {
             title: "Downloads",
             subtitle: headerSubtitle,
             trailing: {
-                if !settled.filter(\.phase.isDone).isEmpty {
-                    Button("Clear Finished") {
-                        for entry in settled where entry.phase.isDone { workshop.dismissDownload(entry.id) }
+                HStack(spacing: 10) {
+                    if !entries.isEmpty { WorkshopSizeMenu(selection: $sizeFilter) }
+                    if !settled.filter(\.phase.isDone).isEmpty {
+                        Button("Clear Finished") {
+                            for entry in settled where entry.phase.isDone { workshop.dismissDownload(entry.id) }
+                        }
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
             })
     }
@@ -72,9 +81,9 @@ struct DownloadsView: View {
 
     private var activeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("In progress", count: active.count)
+            sectionTitle("In progress", count: shownActive.count)
             VStack(spacing: 10) {
-                ForEach(active) { entry in
+                ForEach(shownActive) { entry in
                     DownloadRow(entry: entry, queuePosition: workshop.queuePosition(of: entry.id),
                                 workshop: workshop, model: model, openLibrary: openLibrary)
                         .lwScrollEntry()
@@ -85,9 +94,9 @@ struct DownloadsView: View {
 
     private var settledSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Finished", count: settled.count)
+            sectionTitle("Finished", count: shownSettled.count)
             VStack(spacing: 10) {
-                ForEach(settled) { entry in
+                ForEach(shownSettled) { entry in
                     DownloadRow(entry: entry, queuePosition: nil,
                                 workshop: workshop, model: model, openLibrary: openLibrary)
                         .lwScrollEntry()

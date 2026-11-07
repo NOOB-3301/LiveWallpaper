@@ -28,6 +28,21 @@ struct WorkshopDownloadTests {
         #expect(!WorkshopKit.Output.shouldResume(run(.failure(.timedOut), cancelled: true)))
     }
 
+    @Test func sizeBucketsSplitAtTheirLimits() {
+        let megabyte: Int64 = 1_000_000
+        #expect(WorkshopSizeFilter.under100.matches(100 * megabyte - 1))
+        #expect(!WorkshopSizeFilter.under100.matches(100 * megabyte))
+        #expect(WorkshopSizeFilter.under200.matches(100 * megabyte))
+        #expect(!WorkshopSizeFilter.under500.matches(500 * megabyte))
+        #expect(WorkshopSizeFilter.over500.matches(500 * megabyte))
+        #expect(!WorkshopSizeFilter.over500.matches(500 * megabyte - 1))
+    }
+
+    @Test func unknownSizeOnlyPassesAnySize() {
+        #expect(WorkshopSizeFilter.all.matches(0))
+        for size in WorkshopSizeFilter.allCases where size != .all { #expect(!size.matches(0)) }
+    }
+
     /// The log is the only thing that moves during a transfer, so a line added to it has to register.
     @Test func logGrowthIsVisible() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

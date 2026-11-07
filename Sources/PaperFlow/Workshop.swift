@@ -241,6 +241,29 @@ enum WorkshopKindFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// Size buckets for the browse grid and the Downloads page. Steam's query has no size filter, so this narrows what
+/// is already loaded. The raw value is the limit in MB; decimal, to match the sizes the cards show.
+enum WorkshopSizeFilter: Int, CaseIterable, Identifiable {
+    case all = 0, under100 = 100, under200 = 200, under300 = 300, under400 = 400, under500 = 500, over500 = 501
+
+    var id: Int { rawValue }
+    var label: String {
+        switch self {
+        case .all: return "Any size"
+        case .over500: return "500 MB and up"
+        default: return "Under \(rawValue) MB"
+        }
+    }
+
+    /// An unknown size (0) only passes "Any size": it can't be promised to fit a bucket.
+    func matches(_ bytes: Int64) -> Bool {
+        if self == .all { return true }
+        guard bytes > 0 else { return false }
+        let megabyte: Int64 = 1_000_000
+        return self == .over500 ? bytes >= 500 * megabyte : bytes < Int64(rawValue) * megabyte
+    }
+}
+
 /// One row of the Downloads section: the item and where its download stands.
 struct WorkshopDownloadEntry: Identifiable, Equatable {
     let item: WorkshopItem
@@ -338,10 +361,14 @@ enum WorkshopListState: Equatable {
     @Published var searchText: String = ""
     @Published var sort: WorkshopSort = .trending
     @Published var kindFilter: WorkshopKindFilter = .all
+    @Published var sizeFilter: WorkshopSizeFilter = .all
     @Published var includeMature: Bool = false            // false = hide Questionable and Mature
     @Published private(set) var results: [WorkshopItem] = []
     @Published private(set) var listState: WorkshopListState = .idle
     @Published private(set) var canLoadMore: Bool = false
+
+    /// What the browse grid shows. `results` stays whole, so changing the size never needs a new query.
+    var shownResults: [WorkshopItem] { results.filter { sizeFilter.matches($0.sizeBytes) } }
 
     /// Every item the app has shown or queued, by id. The Downloads section renders from this even after the
     /// results grid has moved on to another search.

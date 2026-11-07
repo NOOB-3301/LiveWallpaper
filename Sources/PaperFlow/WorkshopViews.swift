@@ -404,7 +404,7 @@ struct WorkshopView: View {
     /// Anchored, so the grid keeps showing the same wallpapers, and the one whose details are open, when the detail
     /// pane narrows or widens it.
     private var resultsColumn: some View {
-        AnchoredScrollView(order: workshop.results.map(\.id), keepingVisible: detail?.id) {
+        AnchoredScrollView(order: workshop.shownResults.map(\.id), keepingVisible: detail?.id) {
             VStack(alignment: .leading, spacing: LWTheme.sectionSpacing) {
                 LWPageHeader(
                     title: "Workshop",
@@ -587,7 +587,7 @@ struct WorkshopView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Browse").font(.title3.weight(.semibold))
-                Text("\(workshop.results.count)")
+                Text("\(workshop.shownResults.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -652,6 +652,8 @@ struct WorkshopView: View {
                 }
             }
 
+            WorkshopSizeMenu(selection: $workshop.sizeFilter)
+
             Toggle("Mature", isOn: $workshop.includeMature)
                 .toggleStyle(.checkbox)
                 .help("Include questionable and mature items")
@@ -675,7 +677,12 @@ struct WorkshopView: View {
         if workshop.listState == .loaded, workshop.results.isEmpty {
             Text("No wallpapers match. Try another topic or search.").font(.callout).foregroundStyle(.secondary)
         }
-        if !workshop.results.isEmpty {
+        if workshop.listState == .loaded, !workshop.results.isEmpty, workshop.shownResults.isEmpty {
+            Text(workshop.canLoadMore ? "None of the loaded wallpapers are this size. Load more to keep looking."
+                                      : "No wallpapers of this size.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        if !workshop.shownResults.isEmpty {
             resultGrid
                 .opacity(workshop.listState == .loading ? 0.55 : 1)
                 .animation(LWMotion.content, value: workshop.listState == .loading)
@@ -704,7 +711,7 @@ struct WorkshopView: View {
     private var resultGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: LWTheme.gridSpacing)],
                   alignment: .leading, spacing: LWTheme.gridSpacing) {
-            ForEach(workshop.results) { item in
+            ForEach(workshop.shownResults) { item in
                 CompactCard(item: item, actions: actions(for: item, compact: true))
                     .contentShape(Rectangle())
                     .onTapGesture { detail = item }
@@ -727,6 +734,24 @@ struct WorkshopView: View {
                 .background { glassShape(radius: LWTheme.cardRadius) }
             }
         }
+    }
+}
+
+/// The size filter, shared by the browse grid and the Downloads page.
+struct WorkshopSizeMenu: View {
+    @Binding var selection: WorkshopSizeFilter
+
+    var body: some View {
+        Menu {
+            ForEach(WorkshopSizeFilter.allCases) { size in
+                Button(size.label) { selection = size }
+            }
+        } label: {
+            Label(selection.label, systemImage: "internaldrive")
+                .font(.callout.weight(.medium))
+        }
+        .fixedSize()
+        .help("Show only wallpapers of this download size")
     }
 }
 
