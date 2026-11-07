@@ -689,14 +689,18 @@ enum WorkshopListState: Equatable {
     /// steamcmd download, then import into Library/<id>/.
     private func fetch(_ item: WorkshopItem, _ runner: WorkshopKit.Runner) async -> Result<VideoItem, WorkshopError> {
         WorkshopKit.Staging.wipe()
-        let run: WorkshopKit.Run
-        do {
-            run = try await runner.run(
-                arguments: WorkshopKit.Invocation.download(user: trimmedUsername, id: item.id),
-                onEvent: { self.handle($0, for: item.id) },
-                onTick: { self.pollProgress(item) })
-        } catch {
-            return .failure(WorkshopKit.launchError(error))
+        var run = WorkshopKit.Run()
+        // No wipe between attempts: steamcmd picks a big item up from what it already staged.
+        for attempt in 1...WorkshopKit.Output.downloadAttempts {
+            do {
+                run = try await runner.run(
+                    arguments: WorkshopKit.Invocation.download(user: trimmedUsername, id: item.id),
+                    onEvent: { self.handle($0, for: item.id) },
+                    onTick: { self.pollProgress(item) })
+            } catch {
+                return .failure(WorkshopKit.launchError(error))
+            }
+            guard attempt < WorkshopKit.Output.downloadAttempts, WorkshopKit.Output.shouldResume(run) else { break }
         }
         let successPath: String?
         switch WorkshopKit.Output.downloadResult(run) {
@@ -745,16 +749,17 @@ enum WorkshopListState: Equatable {
         }
     }
 
-    /// Activity and progress from the growth of the download folders; true when anything grew or moved. Progress
-    /// needs the staging folder and the size Steam reported, otherwise it stays indeterminate.
+    /// Activity and progress from the download folders and Steam's log; true when anything grew or moved. The log
+    /// counts because Steam preallocates the item's files, so the folders stop growing in the first second and
+    /// steamcmd prints nothing while it transfers: without it, the idle limit killed every download over two
+    /// minutes. For the same reason the bytes on disk say nothing about progress, so it stays indeterminate.
     private func pollProgress(_ item: WorkshopItem) -> Bool {
         let roots = WorkshopKit.Locate.roots(steamcmd: setup.steamcmdPath, home: WorkshopKit.home)
-        let sizes = roots.map { WorkshopKit.Locate.bytes(id: item.id, in: $0) }
-        let total = sizes.reduce(0, +)
+        let total = roots.map { WorkshopKit.Locate.bytes(id: item.id, in: $0) + WorkshopKit.Locate.logBytes(in: $0) }
+            .reduce(0, +)
         guard total != polledBytes else { return false }
         polledBytes = total
-        let staged = sizes.first ?? 0
-        advance(item.id, to: staged > 0 && item.sizeBytes > 0 ? min(0.99, Double(staged) / Double(item.sizeBytes)) : nil)
+        advance(item.id, to: nil)
         return true
     }
 }
@@ -1200,6 +1205,16 @@ extension WorkshopKit {
             }
         }
 
+        static let downloadAttempts = 3
+
+        /// steamcmd gives up on big items partway (`Timeout downloading item`); running it again continues them.
+        static func shouldResume(_ run: Run) -> Bool {
+            switch downloadResult(run) {
+            case .failure(.timedOut), .failure(.network): return true
+            default: return false
+            }
+        }
+
         static func downloadResult(_ run: Run) -> Result<String?, WorkshopError> {
             if run.cancelled { return .failure(.cancelled) }
             switch run.decisive {
@@ -1508,6 +1523,12 @@ extension WorkshopKit {
             ["downloads", "content"].map {
                 folderBytes(root.appendingPathComponent("steamapps/workshop/\($0)/\(appID)/\(id)"))
             }.max() ?? 0
+        }
+
+        /// Size of Steam's content log under `root`. It gains a download-rate line every minute of a transfer.
+        static func logBytes(in root: URL) -> Int64 {
+            let log = root.appendingPathComponent("logs/content_log.txt")
+            return Int64((try? log.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
         }
 
         static func folderBytes(_ url: URL) -> Int64 {
