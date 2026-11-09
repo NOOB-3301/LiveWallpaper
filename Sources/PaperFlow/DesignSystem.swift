@@ -61,7 +61,7 @@ enum LWTheme {
             let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             return NSColor(hue: hue / 360, saturation: saturation,
                            brightness: dark ? darkBrightness : lightBrightness,
-                           alpha: dark ? 0.13 : 0.05)
+                           alpha: dark ? 0.24 : 0.08)
         })
     }
 }
@@ -162,6 +162,27 @@ struct GlassPanel<Content: View>: View {
                 .overlay {
                     shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
                 }
+        }
+    }
+}
+
+extension View {
+    /// Liquid Glass capsule behind the view on macOS 26 (material fallback earlier, solid with Reduce Transparency).
+    @ViewBuilder func lwGlassCapsule() -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: Capsule())
+        } else {
+            self.background(.ultraThinMaterial, in: Capsule())
+                .overlay { Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1) }
+        }
+    }
+
+    /// Liquid Glass button style on macOS 26, the bordered style earlier.
+    @ViewBuilder func lwGlassButton(prominent: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
+        } else {
+            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
         }
     }
 }

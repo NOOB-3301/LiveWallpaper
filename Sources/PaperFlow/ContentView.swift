@@ -565,52 +565,51 @@ private struct LibraryStage: View {
     // MARK: Preview
 
     private var previewStage: some View {
-        ZStack(alignment: .bottom) {
-            ItemPreviewPane(item: item, broken: broken, openSteamSetup: openSteamSetup, showsNotes: false)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .onTapGesture { if !broken { preview() } }
-                .help(broken ? "" : "Click to preview full screen (⌘Y)")
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                }
-
-            LinearGradient(colors: [.clear, .black.opacity(0.36)], startPoint: .center, endPoint: .bottom)
-                .allowsHitTesting(false)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            HStack(alignment: .bottom, spacing: 8) {
-                if !playing.isEmpty {
-                    HStack(spacing: 6) {
-                        ActivityBars(playing: true, paused: model.isPaused, tint: .white)
-                        Text(model.isPaused ? "Paused" : "Playing")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(.ultraThinMaterial, in: Capsule())
-                }
-                Spacer()
-                GlassPanel(radius: 11) {
-                    Button { model.muted.toggle() } label: {
-                        Image(systemName: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 26)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(3)
-                    .help(model.muted ? "Unmute" : "Mute")
-                    .accessibilityLabel(model.muted ? "Unmute" : "Mute")
-                }
-                .fixedSize()
+        ItemPreviewPane(item: item, broken: broken, openSteamSetup: openSteamSetup, showsNotes: false)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            // Gradient and controls are overlays: as ZStack siblings the greedy gradient took the whole page height.
+            .overlay(alignment: .bottom) {
+                LinearGradient(colors: [.clear, .black.opacity(0.36)], startPoint: .center, endPoint: .bottom)
+                    .allowsHitTesting(false)
             }
-            .padding(10)
+            .overlay(alignment: .bottom) { previewControls }
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .onTapGesture { if !broken { preview() } }
+            .help(broken ? "" : "Click to preview full screen (⌘Y)")
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            }
+    }
+
+    private var previewControls: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if !playing.isEmpty {
+                HStack(spacing: 6) {
+                    ActivityBars(playing: true, paused: model.isPaused, tint: .white)
+                    Text(model.isPaused ? "Paused" : "Playing")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .lwGlassCapsule()
+            }
+            Spacer()
+            Button { model.muted.toggle() } label: {
+                Image(systemName: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 30, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .lwGlassCapsule()
+            .help(model.muted ? "Unmute" : "Mute")
+            .accessibilityLabel(model.muted ? "Unmute" : "Mute")
         }
+        .padding(10)
     }
 
     // MARK: Details
@@ -659,13 +658,14 @@ private struct LibraryStage: View {
             } label: {
                 Label(isPlaying ? "Stop" : "Play", systemImage: isPlaying ? "stop.fill" : "play.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .lwGlassButton(prominent: true)
             .tint(isPlaying ? .red : nil)
 
             Button(action: preview) {
                 Label("Preview", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .keyboardShortcut("y", modifiers: .command)
+            .lwGlassButton()
             .disabled(broken)
             .help("Preview this wallpaper full screen (⌘Y). Esc or Space closes it.")
 
@@ -675,6 +675,7 @@ private struct LibraryStage: View {
                 } label: {
                     Label("Scene settings", systemImage: "slider.horizontal.3")
                 }
+                .lwGlassButton()
                 .help("Frame rate, resolution, zoom, fit, sound and this scene’s own options")
             }
 
@@ -739,9 +740,8 @@ private struct SetAsSegmented: View {
                 }
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.primary.opacity(0.10), lineWidth: 1) }
+        .clipShape(Capsule())
+        .lwGlassCapsule()
         .fixedSize()
     }
 }
