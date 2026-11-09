@@ -79,7 +79,7 @@ struct PaperFlowApp: App {
 // MARK: - Navigation
 
 enum SidebarSelection: Hashable {
-    case all, desktop, lockScreen, scenes, playlists, workshop, downloads, steamSetup
+    case all, desktop, lockScreen, scenes, playlists, playlist(UUID), workshop, downloads, steamSetup
 
     var isLibrary: Bool {
         switch self {
@@ -103,7 +103,8 @@ enum SidebarSelection: Hashable {
         case .desktop: return "Desktop"
         case .lockScreen: return "Lock Screen"
         case .scenes: return "Scenes"
-        case .playlists: return "Playlists"
+        case .playlists: return "All Playlists"
+        case .playlist: return "Playlist"
         case .workshop: return "Workshop"
         case .downloads: return "Downloads"
         case .steamSetup: return "Steam Setup"
@@ -117,6 +118,7 @@ enum SidebarSelection: Hashable {
         case .lockScreen: return "lock.display"
         case .scenes: return "sparkles.rectangle.stack"
         case .playlists: return "list.bullet.rectangle"
+        case .playlist: return "music.note.list"
         case .workshop: return "square.grid.2x2"
         case .downloads: return "arrow.down.circle"
         case .steamSetup: return "key.horizontal"
@@ -160,7 +162,25 @@ struct RootView: View {
                 sidebarRow(.desktop, count: counts.desktop)
                 sidebarRow(.lockScreen, count: counts.lock)
                 sidebarRow(.scenes, count: counts.scenes)
+            }
+            Section("Playlists") {
                 sidebarRow(.playlists, count: nil)
+                ForEach(model.playlists) { list in
+                    HStack(spacing: 0) {
+                        Label(list.name, systemImage: SidebarSelection.playlist(list.id).symbol)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(list.itemIDs.count)")
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.08)))
+                    }
+                    .padding(.vertical, 1)
+                    .tag(SidebarSelection.playlist(list.id))
+                }
             }
             Section("Discover") {
                 sidebarRow(.workshop, count: workshop.results.isEmpty ? nil : workshop.results.count)
@@ -320,14 +340,17 @@ struct RootView: View {
                         openWorkshop: { selection = .workshop },
                         openSteamSetup: { selection = .steamSetup },
                         openPlaylists: { selection = .playlists })
-                .lwInspector(isPresented: $showInspector) {
+                .lwInspector(isPresented: $showInspector, wide: focusedLibraryItem?.isScene == true) {
                     LibraryInspectorView(model: model,
                                          item: focusedLibraryItem,
                                          openSteamSetup: { selection = .steamSetup },
                                          remove: removeFocused)
                 }
         case .playlists:
-            PlaylistView(model: model)
+            PlaylistView(model: model, openPlaylist: { selection = .playlist($0) })
+        case .playlist(let id):
+            PlaylistDetailView(model: model, id: id, onDeleted: { selection = .playlists })
+                .id(id)
         case .workshop:
             EmptyView()
         case .downloads:
@@ -509,10 +532,23 @@ private struct ServiceFooter: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(!model.isRunning && !model.canStart)
+                if model.isRunning { TransportControls(model: model, target: nil) }
+            }
+            if model.isRunning, let name = nowPlayingName {
+                Text(name)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
         .padding(10)
         .background { glassShape(radius: 12) }
+    }
+
+    private var nowPlayingName: String? {
+        guard let id = model.currentID(for: .desktop) ?? model.currentID(for: .lock) else { return nil }
+        return model.videos.first { $0.id == id }?.name
     }
 
     private var dot: Color {

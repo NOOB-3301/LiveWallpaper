@@ -18,6 +18,7 @@ enum LWTheme {
     static let panelRadius: CGFloat = 22
     static let sidebarWidth: CGFloat = 236
     static let inspectorWidth: CGFloat = 330
+    static let wideInspectorWidth: CGFloat = 440
     static let gridSpacing: CGFloat = 20
     static let cardMinWidth: CGFloat = 252
     static let sectionSpacing: CGFloat = 26
@@ -466,11 +467,15 @@ struct LWSearchField: View {
 extension View {
     /// The standard trailing inspector.
     @ViewBuilder
-    func lwInspector<Inspector: View>(isPresented: Binding<Bool>,
+    func lwInspector<Inspector: View>(isPresented: Binding<Bool>, wide: Bool = false,
                                       @ViewBuilder inspector: @escaping () -> Inspector) -> some View {
         self.inspector(isPresented: isPresented) {
-            inspector()
-                .inspectorColumnWidth(min: 280, ideal: LWTheme.inspectorWidth, max: 380)
+            // A scene's settings (sliders, option lists) need more room than a wallpaper's details.
+            if wide {
+                inspector().inspectorColumnWidth(min: 380, ideal: LWTheme.wideInspectorWidth, max: 560)
+            } else {
+                inspector().inspectorColumnWidth(min: 280, ideal: LWTheme.inspectorWidth, max: 380)
+            }
         }
     }
 

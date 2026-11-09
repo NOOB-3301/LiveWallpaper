@@ -14,6 +14,7 @@ public enum ServiceCommand: Codable, Equatable, Sendable {
     case pause
     case resume
     case next(target: WallpaperTarget?)
+    case previous(target: WallpaperTarget?)
     case setMuted(Bool)
     case quit                                             // stop, restore, terminate the service
     case status                                           // no-op: just reply with the current status

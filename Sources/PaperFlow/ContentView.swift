@@ -64,6 +64,9 @@ struct LibraryView: View {
     @State private var selectedIDs: Set<VideoItem.ID> = []
     @State private var anchorID: VideoItem.ID?
     @State private var selectionMode = false
+    @State private var newPlaylistIDs: [VideoItem.ID] = []
+    @State private var newPlaylistName = ""
+    @State private var showNewPlaylist = false
 
     init(model: SettingsModel, filter: LibraryFilter, showInspector: Binding<Bool>,
          openWorkshop: @escaping () -> Void, openSteamSetup: @escaping () -> Void,
@@ -122,6 +125,16 @@ struct LibraryView: View {
             Text(pendingRemoval.count > 1
                  ? "Downloaded Workshop files are deleted and can be downloaded again."
                  : "You can download it again from the Workshop.")
+        }
+        .alert("New Playlist", isPresented: $showNewPlaylist) {
+            TextField("Name", text: $newPlaylistName)
+            Button("Create") {
+                let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+                model.createPlaylist(named: name.isEmpty ? model.nextPlaylistName() : name, ids: newPlaylistIDs)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(newPlaylistIDs.count == 1 ? "1 wallpaper will be added." : "\(newPlaylistIDs.count) wallpapers will be added.")
         }
         .onAppear { reconcileSelection() }
         .onChange(of: filter) { reconcileSelection() }
@@ -239,6 +252,23 @@ struct LibraryView: View {
         }
     }
 
+    /// A card inside a multi-selection acts on the whole selection (in library order); otherwise on itself.
+    private func idsForAdd(_ id: VideoItem.ID) -> [VideoItem.ID] {
+        selectedIDs.count > 1 && selectedIDs.contains(id) ? model.videos.map(\.id).filter(selectedIDs.contains) : [id]
+    }
+
+    /// `playlist` nil asks for a name and creates a new one.
+    private func requestAdd(_ ids: [VideoItem.ID], to playlist: UUID?) {
+        guard !ids.isEmpty else { return }
+        if let playlist {
+            model.addToPlaylist(playlist, ids: ids)
+        } else {
+            newPlaylistIDs = ids
+            newPlaylistName = model.nextPlaylistName()
+            showNewPlaylist = true
+        }
+    }
+
     private func removeSelection() {
         guard !selectedIDs.isEmpty else { return }
         remove(selectedIDs)
@@ -261,6 +291,7 @@ struct LibraryView: View {
                              showInspector: $showInspector,
                              openSteamSetup: openSteamSetup, openPlaylists: openPlaylists,
                              preview: { WallpaperPreviewController.shared.show(item, model: model) },
+                             addToPlaylist: { requestAdd([item.id], to: $0) },
                              remove: { remove([item.id]) })
                     .id(item.id)
                     .transition(.opacity)
@@ -356,6 +387,12 @@ struct LibraryView: View {
             Text(selectionCount == 1 ? "1 selected" : "\(selectionCount) selected")
                 .font(.callout.weight(.semibold))
             Spacer()
+            AddToPlaylistMenu(playlists: model.playlists) {
+                requestAdd(model.videos.map(\.id).filter(selectedIDs.contains), to: $0)
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .disabled(selectedIDs.isEmpty)
             Button(role: .destructive, action: removeSelection) {
                 Label("Remove", systemImage: "trash")
             }
@@ -402,6 +439,8 @@ struct LibraryView: View {
                                     onActivate: { model.play(item.id) },
                                     onPreview: { WallpaperPreviewController.shared.show(item, model: model) },
                                     assign: { model.assign(item.id, to: $0) },
+                                    playlists: model.playlists,
+                                    addToPlaylist: { requestAdd(idsForAdd(item.id), to: $0) },
                                     remove: { remove([item.id]) })
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                             .lwScrollEntry()
@@ -423,6 +462,8 @@ struct LibraryView: View {
                                        onActivate: { model.play(item.id) },
                                        onPreview: { WallpaperPreviewController.shared.show(item, model: model) },
                                        assign: { model.assign(item.id, to: $0) },
+                                       playlists: model.playlists,
+                                       addToPlaylist: { requestAdd(idsForAdd(item.id), to: $0) },
                                        remove: { remove([item.id]) })
                             .lwScrollEntry()
                     }
@@ -531,6 +572,7 @@ private struct LibraryStage: View {
     let openSteamSetup: () -> Void
     let openPlaylists: () -> Void
     let preview: () -> Void
+    let addToPlaylist: (UUID?) -> Void
     let remove: () -> Void
 
     @State private var width: CGFloat = 900
@@ -681,6 +723,7 @@ private struct LibraryStage: View {
 
             Menu {
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+                AddToPlaylistMenu(playlists: model.playlists, choose: addToPlaylist)
                 Divider()
                 Button("Remove…", role: .destructive, action: remove)
             } label: {
@@ -764,6 +807,8 @@ private struct LibraryCard: View {
     let onActivate: () -> Void
     let onPreview: () -> Void
     let assign: (Set<WallpaperTarget>) -> Void
+    let playlists: [SavedPlaylist]
+    let addToPlaylist: (UUID?) -> Void
     let remove: () -> Void
     @State private var hovering = false
 
@@ -893,6 +938,8 @@ private struct LibraryCard: View {
             Divider()
             SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
             Divider()
+            AddToPlaylistMenu(playlists: playlists, choose: addToPlaylist)
+            Divider()
             Button("Remove…", role: .destructive, action: remove)
         }
         .help(broken ? "This file was moved, deleted, or can’t be played." : item.name)
@@ -944,6 +991,8 @@ private struct LibraryListRow: View {
     let onActivate: () -> Void
     let onPreview: () -> Void
     let assign: (Set<WallpaperTarget>) -> Void
+    let playlists: [SavedPlaylist]
+    let addToPlaylist: (UUID?) -> Void
     let remove: () -> Void
     @State private var hovering = false
 
@@ -1015,6 +1064,8 @@ private struct LibraryListRow: View {
             Button("Preview…", action: onPreview).disabled(broken)
             Divider()
             SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
+            Divider()
+            AddToPlaylistMenu(playlists: playlists, choose: addToPlaylist)
             Divider()
             Button("Remove…", role: .destructive, action: remove)
         }
@@ -1114,6 +1165,19 @@ struct LibraryInspectorView: View {
 // MARK: - Set as
 
 @MainActor
+fileprivate struct AddToPlaylistMenu: View {
+    let playlists: [SavedPlaylist]
+    let choose: (UUID?) -> Void
+
+    var body: some View {
+        Menu("Add to Playlist") {
+            ForEach(playlists) { list in Button(list.name) { choose(list.id) } }
+            if !playlists.isEmpty { Divider() }
+            Button("New Playlist…") { choose(nil) }
+        }
+    }
+}
+
 fileprivate struct SetAsItems: View {
     let roles: Set<WallpaperTarget>
     var isScene = false
@@ -1198,21 +1262,10 @@ struct LibrarySettingsCard: View {
 
             Divider()
 
-            InspectorSection(title: "Rotation", subtitle: "Runs on a playlist you curate in Playlists.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Same wallpaper for both", isOn: Binding(
-                        get: { model.sameForBoth },
-                        set: { model.setSameForBoth($0) }))
-
-                    if model.sameForBoth {
-                        RotationBlock(model: model, target: .desktop, title: nil)
-                    } else {
-                        if model.applyToDesktop { RotationBlock(model: model, target: .desktop, title: "Desktop") }
-                        if model.applyToDesktop && model.applyToLockScreen { Divider() }
-                        if model.applyToLockScreen { RotationBlock(model: model, target: .lock, title: "Lock Screen") }
-                    }
-                }
-                .animation(LWMotion.panel, value: model.sameForBoth)
+            InspectorSection(title: "Screens", subtitle: "Rotation, shuffle and timing are set per playlist, on the Playlists page.") {
+                Toggle("Same wallpaper for both", isOn: Binding(
+                    get: { model.sameForBoth },
+                    set: { model.setSameForBoth($0) }))
             }
 
             Divider()
@@ -1245,107 +1298,6 @@ struct LibrarySettingsCard: View {
             Link("Open Wallpaper Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
                 .font(.caption)
         }
-    }
-}
-
-@MainActor
-struct RotationBlock: View {
-    @ObservedObject var model: SettingsModel
-    let target: WallpaperTarget
-    let title: String?
-    @State private var intervalText: String
-    @FocusState private var intervalFocused: Bool
-
-    init(model: SettingsModel, target: WallpaperTarget, title: String?) {
-        self._model = ObservedObject(wrappedValue: model)
-        self.target = target
-        self.title = title
-        self._intervalText = State(initialValue: String(model.snapshot.config(for: target).intervalValue))
-    }
-
-    private var config: TargetConfig { model.snapshot.config(for: target) }
-    private var hasPlaylist: Bool { config.playlist != nil }
-    private var canRotate: Bool { hasPlaylist && model.snapshot.hasMultipleItems(target) }
-    private var itemCount: Int { model.snapshot.items(for: target).count }
-    private var enteredValue: Int? { Int(intervalText).flatMap { $0 > 0 ? min($0, 999) : nil } }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            if let title {
-                Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            }
-            HStack {
-                Text("Rotate wallpaper")
-                Spacer()
-                Toggle("Rotate wallpaper", isOn: rotateBinding).labelsHidden().toggleStyle(.switch)
-            }
-            .disabled(!canRotate)
-            .help("Automatically switch between your wallpapers, in list order.")
-            if config.rotateEnabled && canRotate { intervalRow }
-            if let helper {
-                Text(helper.text)
-                    .font(.caption)
-                    .foregroundStyle(helper.warning ? Color.orange : Color.secondary)
-            }
-            if title != nil, let name = playingName {
-                Text("Playing now: “\(name)”").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-        }
-        .animation(LWMotion.panel, value: config.rotateEnabled && canRotate)
-        .onChange(of: config.intervalValue) { _, value in intervalText = String(value) }
-    }
-
-    private var intervalRow: some View {
-        HStack(spacing: 8) {
-            Text("Every").font(.callout)
-            TextField("", text: $intervalText)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 56)
-                .focused($intervalFocused)
-                .onSubmit(commitInterval)
-                .onChange(of: intervalFocused) { _, focused in if !focused { commitInterval() } }
-                .accessibilityLabel("Interval value")
-            Picker("Interval unit", selection: unitBinding) {
-                ForEach(IntervalUnit.allCases) { Text($0.label.lowercased()).tag($0) }
-            }
-            .labelsHidden().pickerStyle(.menu).frame(width: 104)
-        }
-    }
-
-    private var helper: (text: String, warning: Bool)? {
-        guard canRotate else {
-            if !hasPlaylist {
-                return ("Rotation cycles a playlist you choose. Set one up in Playlists.", false)
-            }
-            return ("Add at least two wallpapers to the playlist to rotate.", false)
-        }
-        guard config.rotateEnabled else { return nil }
-        if enteredValue == nil { return ("Enter a number from 1 to 999.", true) }
-        if config.intervalIsClamped { return ("Minimum is 5 seconds.", true) }
-        return ("Cycles through \(itemCount) wallpapers in playlist order.", false)
-    }
-
-    private var playingName: String? {
-        guard model.isRunning, let id = model.currentID(for: target) else { return nil }
-        return model.videos.first { $0.id == id }?.name
-    }
-
-    private var rotateBinding: Binding<Bool> {
-        Binding(get: { config.rotateEnabled && canRotate },
-                set: { if target == .desktop { model.rotateEnabled = $0 } else { model.lockConfig.rotateEnabled = $0 } })
-    }
-
-    private var unitBinding: Binding<IntervalUnit> {
-        Binding(get: { config.intervalUnit },
-                set: { if target == .desktop { model.intervalUnit = $0 } else { model.lockConfig.intervalUnit = $0 } })
-    }
-
-    private func commitInterval() {
-        if let value = enteredValue {
-            if target == .desktop { model.intervalValue = value } else { model.lockConfig.intervalValue = value }
-        }
-        intervalText = String(config.intervalValue)
     }
 }
 

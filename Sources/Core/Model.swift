@@ -132,13 +132,18 @@ public struct TargetConfig: Codable, Equatable, Sendable {
     public var enabled: Bool              // false = this target is left alone (Apple's wallpaper stays)
     public var selectedID: UUID?          // starting / current choice
     public var playlist: [UUID]?          // nil = every library item in library order; else this order
-    public var playlistID: UUID?          // the SavedPlaylist `playlist` was applied from (nil = unnamed / whole library)
+    public var playlistID: UUID?          // the SavedPlaylist `playlist` was applied from (nil = whole library)
     public var rotateEnabled: Bool
     public var intervalValue: Int
     public var intervalUnit: IntervalUnit
+    public var shuffle: Bool              // playlist order is shuffled (a full shuffled pass before any repeat)
+    public var changeOnWake: Bool         // also move on when the Mac wakes and when the service starts at login
 
     public init(enabled: Bool = true, selectedID: UUID? = nil, playlist: [UUID]? = nil, playlistID: UUID? = nil,
-                rotateEnabled: Bool = false, intervalValue: Int = 5, intervalUnit: IntervalUnit = .minutes) {
+                rotateEnabled: Bool = false, intervalValue: Int = 5, intervalUnit: IntervalUnit = .minutes,
+                shuffle: Bool = false, changeOnWake: Bool = false) {
+        self.shuffle = shuffle
+        self.changeOnWake = changeOnWake
         self.enabled = enabled
         self.selectedID = selectedID
         self.playlist = playlist
@@ -146,6 +151,33 @@ public struct TargetConfig: Codable, Equatable, Sendable {
         self.rotateEnabled = rotateEnabled
         self.intervalValue = intervalValue
         self.intervalUnit = intervalUnit
+    }
+
+    // Files written before shuffle / changeOnWake existed lack those keys.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        selectedID = try c.decodeIfPresent(UUID.self, forKey: .selectedID)
+        playlist = try c.decodeIfPresent([UUID].self, forKey: .playlist)
+        playlistID = try c.decodeIfPresent(UUID.self, forKey: .playlistID)
+        rotateEnabled = try c.decodeIfPresent(Bool.self, forKey: .rotateEnabled) ?? false
+        intervalValue = try c.decodeIfPresent(Int.self, forKey: .intervalValue) ?? 5
+        intervalUnit = try c.decodeIfPresent(IntervalUnit.self, forKey: .intervalUnit) ?? .minutes
+        shuffle = try c.decodeIfPresent(Bool.self, forKey: .shuffle) ?? false
+        changeOnWake = try c.decodeIfPresent(Bool.self, forKey: .changeOnWake) ?? false
+    }
+
+    /// The playback rules of this target; a saved playlist's rules are copied here while it is applied.
+    public var rules: PlaylistRules {
+        get { PlaylistRules(shuffle: shuffle, rotateEnabled: rotateEnabled, intervalValue: intervalValue,
+                            intervalUnit: intervalUnit, changeOnWake: changeOnWake) }
+        set {
+            shuffle = newValue.shuffle
+            rotateEnabled = newValue.rotateEnabled
+            intervalValue = newValue.intervalValue
+            intervalUnit = newValue.intervalUnit
+            changeOnWake = newValue.changeOnWake
+        }
     }
 
     public var intervalSeconds: TimeInterval {
@@ -156,16 +188,54 @@ public struct TargetConfig: Codable, Equatable, Sendable {
     }
 }
 
-/// A named, ordered set of library wallpapers the user can apply to the desktop and/or lock screen.
+/// How a playlist advances. Owned by the playlist; copied onto each screen that runs it.
+public struct PlaylistRules: Codable, Equatable, Sendable {
+    public var shuffle: Bool
+    public var rotateEnabled: Bool       // advance on a timer
+    public var intervalValue: Int
+    public var intervalUnit: IntervalUnit
+    public var changeOnWake: Bool        // also advance when the Mac wakes and when the service starts at login
+
+    public init(shuffle: Bool = false, rotateEnabled: Bool = true, intervalValue: Int = 5,
+                intervalUnit: IntervalUnit = .minutes, changeOnWake: Bool = false) {
+        self.shuffle = shuffle
+        self.rotateEnabled = rotateEnabled
+        self.intervalValue = intervalValue
+        self.intervalUnit = intervalUnit
+        self.changeOnWake = changeOnWake
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        shuffle = try c.decodeIfPresent(Bool.self, forKey: .shuffle) ?? false
+        rotateEnabled = try c.decodeIfPresent(Bool.self, forKey: .rotateEnabled) ?? true
+        intervalValue = LibraryState.clampedInterval(try c.decodeIfPresent(Int.self, forKey: .intervalValue) ?? 5)
+        intervalUnit = try c.decodeIfPresent(IntervalUnit.self, forKey: .intervalUnit) ?? .minutes
+        changeOnWake = try c.decodeIfPresent(Bool.self, forKey: .changeOnWake) ?? false
+    }
+}
+
+/// A named, ordered set of library wallpapers plus its playback rules, applied to the desktop and/or lock screen.
 public struct SavedPlaylist: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var itemIDs: [UUID]
+    public var rules: PlaylistRules
 
-    public init(id: UUID = UUID(), name: String, itemIDs: [UUID]) {
+    public init(id: UUID = UUID(), name: String, itemIDs: [UUID], rules: PlaylistRules = PlaylistRules()) {
         self.id = id
         self.name = name
         self.itemIDs = itemIDs
+        self.rules = rules
+    }
+
+    // v7.0.0 files have no `rules`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        itemIDs = try c.decode([UUID].self, forKey: .itemIDs)
+        rules = try c.decodeIfPresent(PlaylistRules.self, forKey: .rules) ?? PlaylistRules()
     }
 }
 
@@ -245,7 +315,26 @@ public struct LibraryState: Codable, Equatable, Sendable {
         }
         desktop.intervalValue = LibraryState.clampedInterval(desktop.intervalValue)
         lock.intervalValue = LibraryState.clampedInterval(lock.intervalValue)
+        adoptUnnamedPlaylists()
         normalize()
+    }
+
+    private static let desktopPlaylistUUID = UUID(uuidString: "6D1E0A52-7B1B-4C55-9E55-0D5E5C0A0001")!
+    private static let lockPlaylistUUID = UUID(uuidString: "6D1E0A52-7B1B-4C55-9E55-0D5E5C0A0002")!
+
+    /// A screen that has a curated list from before playlists were named becomes a saved playlist, with that
+    /// screen's rotation settings as its rules. Fixed ids, so the app and the service decode the same one.
+    private mutating func adoptUnnamedPlaylists() {
+        if let ids = desktop.playlist, desktop.playlistID == nil {
+            playlists.append(SavedPlaylist(id: Self.desktopPlaylistUUID, name: "Desktop Playlist",
+                                           itemIDs: ids, rules: desktop.rules))
+            desktop.playlistID = Self.desktopPlaylistUUID
+        }
+        if !sameForBoth, let ids = lock.playlist, lock.playlistID == nil {
+            playlists.append(SavedPlaylist(id: Self.lockPlaylistUUID, name: "Lock Screen Playlist",
+                                           itemIDs: ids, rules: lock.rules))
+            lock.playlistID = Self.lockPlaylistUUID
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -308,6 +397,16 @@ public struct LibraryState: Codable, Equatable, Sendable {
         return config.playlist != nil && config.rotateEnabled && hasMultipleItems(target)
     }
     public func interval(for target: WallpaperTarget) -> TimeInterval { config(for: target).intervalSeconds }
+    /// Shuffle applies to a curated playlist only.
+    public func shuffles(_ target: WallpaperTarget) -> Bool {
+        let config = config(for: target)
+        return config.playlist != nil && config.shuffle
+    }
+    /// The target moves on when the Mac wakes or the service starts at login.
+    public func advancesOnWake(_ target: WallpaperTarget) -> Bool {
+        let config = config(for: target)
+        return config.playlist != nil && config.changeOnWake && hasMultipleItems(target)
+    }
 
     /// The targets for which `id` is the selected item and the target is enabled (drives the role badges).
     public func targets(of id: UUID) -> Set<WallpaperTarget> {
@@ -399,6 +498,7 @@ public struct LibraryState: Codable, Equatable, Sendable {
         update(target) { config in
             config.playlistID = list?.id
             config.playlist = list?.itemIDs
+            if let list { config.rules = list.rules }
             if let ids = list?.itemIDs, !ids.contains(where: { $0 == config.selectedID }) { config.selectedID = ids.first }
         }
     }

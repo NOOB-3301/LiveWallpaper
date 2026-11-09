@@ -147,6 +147,58 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(round.desktop.playlistID, list.id)
     }
 
+    func testPlaylistRulesFollowThePlaylist() {
+        let a = VideoItem(path: "/a.mp4"), b = VideoItem(path: "/b.mp4")
+        var state = LibraryState(videos: [a, b])
+        var list = SavedPlaylist(name: "Mix", itemIDs: [a.id, b.id],
+                                 rules: PlaylistRules(shuffle: true, rotateEnabled: true, intervalValue: 7,
+                                                      intervalUnit: .hours, changeOnWake: true))
+        state.savePlaylist(list)
+        state.applyPlaylist(list.id, to: [.desktop, .lock])
+        XCTAssertTrue(state.shuffles(.desktop))
+        XCTAssertTrue(state.rotates(.lock))
+        XCTAssertTrue(state.advancesOnWake(.desktop))
+        XCTAssertEqual(state.desktop.intervalValue, 7)
+        XCTAssertEqual(state.desktop.intervalUnit, .hours)
+
+        list.rules.shuffle = false                       // editing the playlist reaches the screen
+        list.rules.intervalValue = 2
+        state.savePlaylist(list)
+        XCTAssertFalse(state.shuffles(.desktop))
+        XCTAssertEqual(state.lock.intervalValue, 2)
+
+        state.applyPlaylist(nil, to: [.desktop, .lock])  // the whole library: no shuffle, no rotation
+        XCTAssertFalse(state.shuffles(.desktop))
+        XCTAssertFalse(state.rotates(.desktop))
+    }
+
+    func testOlderStateFilesDecode() throws {
+        let a = UUID(), b = UUID()
+        // v7.0.0: playlists without rules, targets without shuffle / changeOnWake.
+        let v7 = """
+        {"schema":2,"revision":4,"videos":[],"sameForBoth":true,
+         "desktop":{"enabled":true,"intervalValue":5,"intervalUnit":"minutes","rotateEnabled":false,"playlistID":"\(a.uuidString)"},
+         "lock":{"enabled":true,"intervalValue":5,"intervalUnit":"minutes","rotateEnabled":false},
+         "playlists":[{"id":"\(a.uuidString)","name":"Mix","itemIDs":["\(b.uuidString)"]}]}
+        """
+        let decoded = try JSONDecoder().decode(LibraryState.self, from: Data(v7.utf8))
+        XCTAssertEqual(decoded.playlists.first?.name, "Mix")
+        XCTAssertEqual(decoded.playlists.first?.rules, PlaylistRules())
+        XCTAssertFalse(decoded.desktop.shuffle)
+
+        // v6: a curated list with no name becomes a saved playlist carrying that screen's rotation settings.
+        let v6 = """
+        {"schema":2,"revision":1,"videos":[],"sameForBoth":true,
+         "desktop":{"enabled":true,"intervalValue":9,"intervalUnit":"seconds","rotateEnabled":true,"playlist":["\(b.uuidString)"]},
+         "lock":{"enabled":true,"intervalValue":5,"intervalUnit":"minutes","rotateEnabled":false}}
+        """
+        let migrated = try JSONDecoder().decode(LibraryState.self, from: Data(v6.utf8))
+        XCTAssertEqual(migrated.playlists.count, 1)
+        XCTAssertEqual(migrated.desktop.playlistID, migrated.playlists.first?.id)
+        XCTAssertEqual(migrated.playlists.first?.rules.intervalValue, 9)
+        XCTAssertEqual(migrated.lock.playlistID, migrated.desktop.playlistID, "lock mirrors the desktop")
+    }
+
     func testLockRenderCacheValidity() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lw-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

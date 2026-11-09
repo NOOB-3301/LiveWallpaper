@@ -40,6 +40,10 @@ import Core
     private let lock = LockScreenWallpaper()
     private var current: [WallpaperTarget: UUID] = [:]
     private var rotationTimers: [WallpaperTarget: Timer] = [:]
+    /// Shuffle: ids still to play in the current pass, and what played before (for Previous).
+    private var shuffleBag: [WallpaperTarget: [UUID]] = [:]
+    private var playedBefore: [WallpaperTarget: [UUID]] = [:]
+    private var wakeObserver: NSObjectProtocol?
     private var activity: NSObjectProtocol?
     private var lockApplies = 0
     private var lockRender: Task<Void, Never>?
@@ -65,6 +69,7 @@ import Core
         scene.setMuted(state.muted)
         if AgentRecordStore.load().wantsRunning, hasPlayableTarget {
             start(at: nil)
+            advanceChannelsOnWake()
         } else {
             setWantsRunning(false)
             lock.restore()
@@ -142,9 +147,42 @@ import Core
         guard isRunning else { return }
         for channel in channels(target) where current[channel] != nil && state.hasMultipleItems(channel) {
             let items = state.items(for: channel)
-            applyItem(on: channel, startingAt: (items.firstIndex { $0.id == current[channel] } ?? -1) + 1)
+            if state.shuffles(channel), let playing = current[channel] {
+                playedBefore[channel, default: []].append(playing)
+                playedBefore[channel] = playedBefore[channel]?.suffix(50).map { $0 }
+            }
+            applyItem(on: channel, startingAt: nextIndex(on: channel, in: items))
         }
         changed()
+    }
+
+    /// Moves `target` (nil = both) back: the item that played before when shuffling, else the one above.
+    func previous(target: WallpaperTarget? = nil) {
+        guard isRunning else { return }
+        for channel in channels(target) where current[channel] != nil && state.hasMultipleItems(channel) {
+            let items = state.items(for: channel)
+            if state.shuffles(channel), let last = playedBefore[channel]?.popLast(),
+               let index = items.firstIndex(where: { $0.id == last }) {
+                applyItem(on: channel, startingAt: index)
+            } else {
+                let index = items.firstIndex { $0.id == current[channel] } ?? 0
+                applyItem(on: channel, startingAt: (index + items.count - 1) % items.count)
+            }
+        }
+        changed()
+    }
+
+    // Sequential: the item below. Shuffle: the next of a shuffled pass over every item, so nothing repeats until all
+    // have played, and the item on screen is never picked again straight away.
+    private func nextIndex(on channel: WallpaperTarget, in items: [VideoItem]) -> Int {
+        let playing = current[channel]
+        guard state.shuffles(channel) else { return (items.firstIndex { $0.id == playing } ?? -1) + 1 }
+        let ids = Set(items.map(\.id))
+        var bag = (shuffleBag[channel] ?? []).filter { ids.contains($0) && $0 != playing }
+        if bag.isEmpty { bag = items.map(\.id).filter { $0 != playing }.shuffled() }
+        let pick = bag.removeFirst()
+        shuffleBag[channel] = bag
+        return items.firstIndex { $0.id == pick } ?? 0
     }
 
     /// Pauses/resumes the desktop AND the rotation timers.
@@ -389,12 +427,25 @@ import Core
             self?.scene.setScreenLocked(locked)
         }
         lock.startObservingLock()
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.advanceChannelsOnWake() }
+            }
+        }
         guard screenObserver == nil else { return }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.screensChanged() }
         }
+    }
+
+    /// "Change on wake" playlists move on once when the Mac wakes (and when a resumed run starts at login).
+    private func advanceChannelsOnWake() {
+        guard isRunning, !isPaused else { return }
+        for channel in WallpaperTarget.allCases where state.advancesOnWake(channel) { next(target: channel) }
     }
 
     // Debounced: a display change fires several notifications. A new size may have a different cached lock video.
@@ -433,6 +484,10 @@ import Core
         screenTask = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        wakeObserver = nil
+        shuffleBag.removeAll()
+        playedBefore.removeAll()
         video.stop()
         scene.stop()
         lock.onScreenLock = nil

@@ -107,6 +107,7 @@ enum ServiceEntry {
         case .pause: orchestrator.setPaused(true)
         case .resume: orchestrator.setPaused(false)
         case .next(let target): orchestrator.next(target: target)
+        case .previous(let target): orchestrator.previous(target: target)
         case .setMuted(let muted): orchestrator.setMuted(muted)
         case .status: break
         case .quit:

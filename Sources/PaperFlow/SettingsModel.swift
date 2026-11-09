@@ -28,6 +28,8 @@ import SceneFormat
     /// The desktop's curated playlist; nil = the whole library in library order (TargetConfig.playlist).
     @Published var desktopPlaylistIDs: [VideoItem.ID]? = nil { didSet { persist() } }
     @Published var desktopPlaylistID: UUID? = nil { didSet { persist() } }   // the saved playlist behind it
+    @Published var desktopShuffle: Bool = false { didSet { persist() } }
+    @Published var desktopChangeOnWake: Bool = false { didSet { persist() } }
     @Published var playlists: [SavedPlaylist] = [] { didSet { persist() } }
     // Schema v2. `selectedID`, `rotateEnabled`, `intervalValue`, `intervalUnit` and `applyToDesktop` above are
     // the DESKTOP config (shared with the lock screen while `sameForBoth`); `lockConfig` is the lock screen's own
@@ -207,6 +209,37 @@ import SceneFormat
         guard state != snapshot else { return }
         batch { apply(state) }
     }
+
+    /// Creates a playlist from `ids` (library order is kept as given) and returns its id.
+    @discardableResult
+    func createPlaylist(named name: String, ids: [VideoItem.ID]) -> UUID {
+        let list = SavedPlaylist(name: name, itemIDs: ids)
+        savePlaylist(list)
+        return list.id
+    }
+
+    /// Appends `ids` to a saved playlist, skipping what it already has.
+    func addToPlaylist(_ playlistID: UUID, ids: [VideoItem.ID]) {
+        guard var list = playlists.first(where: { $0.id == playlistID }) else { return }
+        list.itemIDs += ids.filter { !list.itemIDs.contains($0) }
+        savePlaylist(list)
+    }
+
+    /// "Playlist 3": the first unused number.
+    func nextPlaylistName() -> String {
+        var number = playlists.count + 1
+        while playlists.contains(where: { $0.name == "Playlist \(number)" }) { number += 1 }
+        return "Playlist \(number)"
+    }
+
+    // MARK: Transport (what is playing now, per screen or both)
+
+    /// Jumps `target` to `id` without changing any assignment (the item must be in what the target plays).
+    func jump(to id: VideoItem.ID, on target: WallpaperTarget) { send(.start(itemID: id, target: target)) }
+
+    func next(target: WallpaperTarget? = nil) { send(.next(target: target)) }
+    func previous(target: WallpaperTarget? = nil) { send(.previous(target: target)) }
+    func togglePause() { send(isPaused ? .resume : .pause) }
 
     var selectedItem: VideoItem? { videos.first { $0.id == selectedID } }
     var currentIndex: Int? { videos.firstIndex { $0.id == currentID } }
@@ -411,6 +444,8 @@ import SceneFormat
         applyToLockScreen = state.applyToLockScreen
         desktopPlaylistIDs = state.desktop.playlist
         desktopPlaylistID = state.desktop.playlistID
+        desktopShuffle = state.desktop.shuffle
+        desktopChangeOnWake = state.desktop.changeOnWake
         playlists = state.playlists
         sameForBoth = state.sameForBoth
         lockConfig = state.lock
