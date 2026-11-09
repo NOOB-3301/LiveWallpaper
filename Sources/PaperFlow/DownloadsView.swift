@@ -156,18 +156,7 @@ private struct DownloadRow: View {
     // MARK: Pieces
 
     private var thumbnail: some View {
-        AsyncImage(url: item.previewURL) { phase in
-            if let image = phase.image {
-                image.resizable().scaledToFill()
-            } else {
-                ZStack {
-                    Rectangle().fill(Color.primary.opacity(0.05))
-                    Image(systemName: item.kind == .scene ? "sparkles" : "film")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
+        RemoteStill(url: item.previewURL, maxPixel: 256, symbol: item.kind == .scene ? "sparkles" : "film")
         .frame(width: 112, height: 64)
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {

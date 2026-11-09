@@ -103,16 +103,7 @@ private struct PreviewImage: View {
     let url: URL?
 
     var body: some View {
-        Rectangle().fill(Color.primary.opacity(0.05))
-            .overlay {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Image(systemName: "film").foregroundStyle(.secondary)
-                    }
-                }
-            }
+        RemoteStill(url: url, maxPixel: 480)
             .aspectRatio(16 / 9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
@@ -130,12 +121,6 @@ struct WorkshopChip: View {
     var body: some View {
         LWChip(text: text, tint: tint)
     }
-}
-
-/// The tags of an item that are not meta chips (kind, resolution, rating), capped to keep cards tidy.
-private func topicTags(of item: WorkshopItem, limit: Int) -> [String] {
-    let shown = Set([item.resolutionTag, item.ratingTag, item.kind.rawValue].compactMap { $0?.lowercased() })
-    return item.tags.filter { !shown.contains($0.lowercased()) }.prefix(limit).map { $0 }
 }
 
 @MainActor
@@ -271,49 +256,186 @@ struct WorkshopCardActions: View {
 
 // MARK: - Item cards: layouts
 
+/// A wallpaper in the grid: a 16:9 poster with its title over a gradient, two badges (kind and a short resolution) and
+/// one corner control that follows the download: arrow on hover, then progress, then a check. Size, date, rating and
+/// subscribers are in the detail pane. Every card is the same height, which keeps the grid steady.
 @MainActor
-private struct CompactCard<Actions: View>: View {
+private struct WorkshopPosterCard: View {
     let item: WorkshopItem
-    let actions: Actions
-    var dimmed = false                         // already in the library
-    var onTag: ((String) -> Void)? = nil       // a tag chip was clicked
-
-    private var info: String {
-        var parts: [String] = []
-        if item.sizeBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file)) }
-        if let resolution = item.resolutionTag { parts.append(resolution) }
-        return parts.joined(separator: " · ")
-    }
+    let action: WorkshopCardAction
+    let ready: Bool                     // Steam setup is complete
+    let onOpen: () -> Void
+    let onDownload: () -> Void
+    let onCancel: () -> Void
+    let showInLibrary: () -> Void
 
     @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    private var kind: String? { item.kind == .unknown ? nil : item.kind.rawValue }
+    private var inLibrary: Bool { if case .inLibrary = action { return true } else { return false } }
+    private var cantPlay: Bool { if case .cantPlay = action { return true } else { return false } }
+    private var isDownloadable: Bool { if case .download = action { return true } else { return false } }
+    private var corner: RoundedRectangle { RoundedRectangle(cornerRadius: 14, style: .continuous) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            PreviewImage(url: item.previewURL)
-                .scaleEffect(hovering ? 1.02 : 1, anchor: .center)
-                .animation(LWMotion.hover, value: hovering)
-            Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true)
-            HStack(spacing: 5) {
-                ForEach(topicTags(of: item, limit: 2), id: \.self) { tag in
-                    if let onTag {
-                        Button { onTag(tag) } label: { LWChip(text: tag) }
-                            .buttonStyle(.plain)
-                            .help("Show only “\(tag)”")
-                    } else {
-                        LWChip(text: tag)
-                    }
+        Color.clear
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .overlay {
+                ZStack(alignment: .bottomLeading) {
+                    RemoteStill(url: item.previewURL, maxPixel: 768, symbol: item.kind == .scene ? "sparkles" : "film")
+                        .scaleEffect(hovering ? 1.03 : 1)
+                    LinearGradient(colors: [.clear, .black.opacity(0.74)],
+                                   startPoint: UnitPoint(x: 0.5, y: 0.35), endPoint: .bottom)
+                    if (inLibrary && !hovering) || cantPlay { Color.black.opacity(0.38) }
+                    content
                 }
             }
-            .frame(height: 16, alignment: .top)
-            Text(info).font(.caption).foregroundStyle(.secondary)
-            actions
+            .clipShape(corner)
+            .overlay {
+                corner.strokeBorder(focused ? Color.accentColor : Color.white.opacity(hovering ? 0.22 : 0.08),
+                                    lineWidth: focused ? 2.5 : 1)
+            }
+            .contentShape(corner)
+            .onTapGesture(perform: onOpen)
+            .onHover { inside in withAnimation(LWMotion.hover) { hovering = inside } }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($focused)
+            .onKeyPress(.return) { onOpen(); return .handled }
+            .help(item.title)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(WorkshopCardCopy.accessibilityLabel(title: item.title, kind: kind,
+                                                                    resolutionTag: item.resolutionTag))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Open details", onOpen)
+            .accessibilityAction(named: "Download") { if isDownloadable, ready { onDownload() } }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 6) {
+                badges
+                Spacer(minLength: 6)
+                control
+            }
+            Spacer(minLength: 0)
+            HStack(alignment: .bottom, spacing: 8) {
+                Text(item.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                if hovering, isDownloadable, item.sizeBytes > 0 {
+                    Text(ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+            }
         }
-        .padding(14)
-        .background { glassShape(radius: LWTheme.cardRadius) }
-        .opacity(dimmed && !hovering ? 0.55 : 1)
-        .animation(LWMotion.hover, value: hovering)
-        .onHover { hovering = $0 }
-        .contentShape(Rectangle())
+        .padding(10)
+    }
+
+    private var badges: some View {
+        HStack(spacing: 5) {
+            ForEach(WorkshopCardCopy.badges(kind: kind, resolutionTag: item.resolutionTag), id: \.self) { badge in
+                Text(badge)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(badge == "Web" || badge == "App" ? Color.orange : Color.white)
+                    .padding(.horizontal, 8)
+                    .frame(height: 19)
+                    .background(.black.opacity(0.5), in: Capsule())
+            }
+        }
+    }
+
+    // MARK: Corner control
+
+    @ViewBuilder private var control: some View {
+        switch action {
+        case .download:
+            if hovering || focused {
+                Button(action: onDownload) { glyph("arrow.down", tint: Color.accentColor) }
+                    .buttonStyle(.plain)
+                    .disabled(!ready)
+                    .opacity(ready ? 1 : 0.5)
+                    .help(ready ? "Download" : WorkshopCardActions.setupFirst)
+                    .accessibilityLabel("Download")
+            }
+        case .cantPlay:
+            Text("Can’t play here")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.8))
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(Color.orange, in: Capsule())
+                .help(WorkshopError.unsupportedType(item.kind).message)
+        case .inLibrary:
+            Button(action: showInLibrary) { glyph("checkmark", tint: .green) }
+                .buttonStyle(.plain)
+                .help("In your library. Show in Library")
+                .accessibilityLabel("In your library. Show in Library")
+        case .queued:
+            cancellable { pill("Waiting…") }
+        case .signingIn:
+            cancellable { spinner }
+        case .downloading(let value):
+            cancellable {
+                if let value {
+                    ProgressRing(progress: min(max(value, 0), 1), size: 34, lineWidth: 3, tint: .white)
+                        .background(Circle().fill(.black.opacity(0.45)))
+                        .accessibilityLabel("Downloading \(Int((min(max(value, 0), 1) * 100).rounded())) percent")
+                } else {
+                    spinner
+                }
+            }
+        case .importing:
+            spinner
+        case .failed(let error):
+            Button(action: onOpen) { glyph("exclamationmark", tint: .orange) }
+                .buttonStyle(.plain)
+                .help("\(error.title). \(error.message)")
+                .accessibilityLabel("Download failed: \(error.title)")
+        }
+    }
+
+    private func glyph(_ symbol: String, tint: Color) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(tint))
+            .contentShape(Circle())
+    }
+
+    private var spinner: some View {
+        ProgressView()
+            .controlSize(.small)
+            .tint(.white)
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(.black.opacity(0.45)))
+    }
+
+    private func pill(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(.black.opacity(0.5), in: Capsule())
+    }
+
+    /// Hovering turns a running download's indicator into a cancel button.
+    @ViewBuilder private func cancellable<Content: View>(@ViewBuilder _ running: () -> Content) -> some View {
+        if hovering {
+            Button(action: onCancel) { glyph("xmark", tint: Color.black.opacity(0.55)) }
+                .buttonStyle(.plain)
+                .help("Cancel the download")
+                .accessibilityLabel("Cancel download")
+        } else {
+            running()
+        }
     }
 }
 
@@ -446,13 +568,6 @@ struct WorkshopView: View {
         .background { glassShape(radius: LWTheme.cardRadius) }
     }
 
-    private func actions(for item: WorkshopItem, compact: Bool) -> some View {
-        WorkshopCardActions(item: item,
-                    action: WorkshopCardAction.make(item: item, state: workshop.downloads[item.id], inLibrary: workshop.isInLibrary(item.id)),
-                    ready: workshop.setup.canDownload, compact: compact, workshop: workshop,
-                    openSteamSetup: openSteamSetup, showInLibrary: { showInLibrary(item) })
-    }
-
     private func showInLibrary(_ item: WorkshopItem) {
         if let video = model.videos.first(where: { $0.workshopID == item.id }) { model.focusedID = video.id }
         openLibrary()
@@ -539,11 +654,15 @@ struct WorkshopView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: LWTheme.gridSpacing)],
                   alignment: .leading, spacing: LWTheme.gridSpacing) {
             ForEach(workshop.results) { item in
-                CompactCard(item: item, actions: actions(for: item, compact: true),
-                            dimmed: workshop.isInLibrary(item.id),
-                            onTag: { workshop.narrow(toTag: $0) })
-                    .contentShape(Rectangle())
-                    .onTapGesture { detail = item }
+                WorkshopPosterCard(
+                    item: item,
+                    action: WorkshopCardAction.make(item: item, state: workshop.downloads[item.id],
+                                                    inLibrary: workshop.isInLibrary(item.id)),
+                    ready: workshop.setup.canDownload,
+                    onOpen: { detail = item },
+                    onDownload: { workshop.download(item) },
+                    onCancel: { workshop.cancelDownload(item.id) },
+                    showInLibrary: { showInLibrary(item) })
                     .scrollAnchorItem(item.id)
                     .lwScrollEntry()
                     .onAppear { workshop.loadMoreIfNeeded(after: item.id) }
@@ -554,16 +673,26 @@ struct WorkshopView: View {
     private var skeletonGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: LWTheme.gridSpacing)],
                   alignment: .leading, spacing: LWTheme.gridSpacing) {
-            ForEach(0..<6, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 10) {
-                    SkeletonBlock(height: 132, radius: 12)
-                    SkeletonBlock(height: 12, width: 180)
-                    SkeletonBlock(height: 10, width: 110)
-                }
-                .padding(14)
-                .background { glassShape(radius: LWTheme.cardRadius) }
+            ForEach(0..<8, id: \.self) { _ in
+                Color.clear
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay { SkeletonFill(radius: 14) }
             }
         }
+    }
+}
+
+/// A shimmering placeholder that fills its frame (SkeletonBlock has a fixed height).
+private struct SkeletonFill: View {
+    var radius: CGFloat = 14
+    @State private var dim = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(Color.secondary.opacity(dim ? 0.09 : 0.16))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
     }
 }
 

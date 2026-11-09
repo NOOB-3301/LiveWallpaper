@@ -250,13 +250,7 @@ struct WorkshopDetailView: View {
                         ForEach(creatorItems) { other in
                             Button { open(other) } label: {
                                 VStack(alignment: .leading, spacing: 5) {
-                                    AsyncImage(url: other.previewURL) { phase in
-                                        if let image = phase.image {
-                                            image.resizable().scaledToFill()
-                                        } else {
-                                            Color.primary.opacity(0.06)
-                                        }
-                                    }
+                                    RemoteStill(url: other.previewURL, maxPixel: 320)
                                     .frame(width: 140, height: 79)
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                     Text(other.title).font(.caption).lineLimit(2)

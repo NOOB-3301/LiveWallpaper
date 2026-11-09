@@ -56,4 +56,11 @@ struct LibraryPresentationTests {
         #expect(LibraryCopy.rotationSummary(desktop: false, lock: true) == "Rotation is on for the lock screen.")
         #expect(LibraryCopy.rotationSummary(desktop: true, lock: true) == "Rotation is on for both screens.")
     }
+
+    @Test func cardSubtitle() {
+        #expect(LibraryCopy.cardSubtitle(isScene: false, isWorkshop: false, author: nil) == "Video")
+        #expect(LibraryCopy.cardSubtitle(isScene: true, isWorkshop: false, author: "") == "Scene")
+        #expect(LibraryCopy.cardSubtitle(isScene: true, isWorkshop: true, author: "Talia") == "Scene · Workshop · by Talia")
+        #expect(LibraryCopy.cardSubtitle(isScene: false, isWorkshop: true, author: "  ") == "Video · Workshop")
+    }
 }

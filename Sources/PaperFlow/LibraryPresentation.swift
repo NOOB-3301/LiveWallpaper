@@ -46,6 +46,14 @@ enum LibraryCopy {
         }
     }
 
+    /// The grey line under a library card's name: "Scene · Workshop · by Talia".
+    static func cardSubtitle(isScene: Bool, isWorkshop: Bool, author: String?) -> String {
+        var parts = [isScene ? "Scene" : "Video"]
+        if isWorkshop { parts.append("Workshop") }
+        if let author = author?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty { parts.append("by \(author)") }
+        return parts.joined(separator: " · ")
+    }
+
     /// One line under the stage's buttons; rotation itself is edited on the Playlists page.
     static func rotationSummary(desktop: Bool, lock: Bool) -> String {
         switch (desktop, lock) {

@@ -400,6 +400,7 @@ struct LibraryView: View {
                                     onSelect: { select(item) },
                                     onToggleSelect: { toggleSelection(item.id) },
                                     onActivate: { model.play(item.id) },
+                                    onPreview: { WallpaperPreviewController.shared.show(item, model: model) },
                                     assign: { model.assign(item.id, to: $0) },
                                     remove: { remove([item.id]) })
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -420,6 +421,7 @@ struct LibraryView: View {
                                        onSelect: { select(item) },
                                        onToggleSelect: { toggleSelection(item.id) },
                                        onActivate: { model.play(item.id) },
+                                       onPreview: { WallpaperPreviewController.shared.show(item, model: model) },
                                        assign: { model.assign(item.id, to: $0) },
                                        remove: { remove([item.id]) })
                             .lwScrollEntry()
@@ -760,6 +762,7 @@ private struct LibraryCard: View {
     let onSelect: () -> Void
     let onToggleSelect: () -> Void
     let onActivate: () -> Void
+    let onPreview: () -> Void
     let assign: (Set<WallpaperTarget>) -> Void
     let remove: () -> Void
     @State private var hovering = false
@@ -817,6 +820,8 @@ private struct LibraryCard: View {
                             .help("Play wallpaper")
 
                             Menu {
+                                Button("Preview…", action: onPreview).disabled(broken)
+                                Divider()
                                 SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
                                 Divider()
                                 Button("Remove…", role: .destructive, action: remove)
@@ -884,6 +889,8 @@ private struct LibraryCard: View {
             withAnimation(LWMotion.hover) { hovering = inside }
         }
         .contextMenu {
+            Button("Preview…", action: onPreview).disabled(broken)
+            Divider()
             SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
             Divider()
             Button("Remove…", role: .destructive, action: remove)
@@ -892,6 +899,8 @@ private struct LibraryCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(item.name), \(cardMeta)")
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAction(named: "Play", onActivate)
+        .accessibilityAction(named: "Preview") { if !broken { onPreview() } }
     }
 
     private var selectionBadge: some View {
@@ -916,8 +925,7 @@ private struct LibraryCard: View {
             if render.state == .rendering { return "Rendering for lock screen…" }
             if render.state == .queued { return "Waiting to render…" }
         }
-        if item.isWorkshop { return "Workshop" }
-        return item.isScene ? "Scene" : "Video"
+        return LibraryCopy.cardSubtitle(isScene: item.isScene, isWorkshop: item.isWorkshop, author: item.author)
     }
 }
 
@@ -934,6 +942,7 @@ private struct LibraryListRow: View {
     let onSelect: () -> Void
     let onToggleSelect: () -> Void
     let onActivate: () -> Void
+    let onPreview: () -> Void
     let assign: (Set<WallpaperTarget>) -> Void
     let remove: () -> Void
     @State private var hovering = false
@@ -974,6 +983,8 @@ private struct LibraryListRow: View {
                 Spacer(minLength: 8)
                 if !playing.isEmpty { ActivityBars(playing: true, paused: paused) }
                 Menu {
+                    Button("Preview…", action: onPreview).disabled(broken)
+                    Divider()
                     SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
                     Divider()
                     Button("Remove…", role: .destructive, action: remove)
@@ -1001,6 +1012,8 @@ private struct LibraryListRow: View {
         }
         .onHover { inside in withAnimation(LWMotion.hover) { hovering = inside } }
         .contextMenu {
+            Button("Preview…", action: onPreview).disabled(broken)
+            Divider()
             SetAsItems(roles: roles, isScene: item.isScene, assign: assign)
             Divider()
             Button("Remove…", role: .destructive, action: remove)
