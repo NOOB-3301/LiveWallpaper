@@ -132,15 +132,17 @@ public struct TargetConfig: Codable, Equatable, Sendable {
     public var enabled: Bool              // false = this target is left alone (Apple's wallpaper stays)
     public var selectedID: UUID?          // starting / current choice
     public var playlist: [UUID]?          // nil = every library item in library order; else this order
+    public var playlistID: UUID?          // the SavedPlaylist `playlist` was applied from (nil = unnamed / whole library)
     public var rotateEnabled: Bool
     public var intervalValue: Int
     public var intervalUnit: IntervalUnit
 
-    public init(enabled: Bool = true, selectedID: UUID? = nil, playlist: [UUID]? = nil, rotateEnabled: Bool = false,
-                intervalValue: Int = 5, intervalUnit: IntervalUnit = .minutes) {
+    public init(enabled: Bool = true, selectedID: UUID? = nil, playlist: [UUID]? = nil, playlistID: UUID? = nil,
+                rotateEnabled: Bool = false, intervalValue: Int = 5, intervalUnit: IntervalUnit = .minutes) {
         self.enabled = enabled
         self.selectedID = selectedID
         self.playlist = playlist
+        self.playlistID = playlistID
         self.rotateEnabled = rotateEnabled
         self.intervalValue = intervalValue
         self.intervalUnit = intervalUnit
@@ -151,6 +153,19 @@ public struct TargetConfig: Codable, Equatable, Sendable {
     }
     public var intervalIsClamped: Bool {
         Double(intervalValue) * intervalUnit.multiplier < LibraryState.minimumInterval
+    }
+}
+
+/// A named, ordered set of library wallpapers the user can apply to the desktop and/or lock screen.
+public struct SavedPlaylist: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var itemIDs: [UUID]
+
+    public init(id: UUID = UUID(), name: String, itemIDs: [UUID]) {
+        self.id = id
+        self.name = name
+        self.itemIDs = itemIDs
     }
 }
 
@@ -169,6 +184,7 @@ public struct LibraryState: Codable, Equatable, Sendable {
     public var lock: TargetConfig     // ignored apart from `enabled` while sameForBoth
     public var sceneOptions: [String: SceneOptions] = [:]   // per scene, keyed by VideoItem.id.uuidString
     public var power: PowerOptions = PowerOptions()           // global scene settings
+    public var playlists: [SavedPlaylist] = []                // named playlists; a target runs one via TargetConfig.playlistID
 
     public init(schema: Int = LibraryState.currentSchema, revision: Int = 0, videos: [VideoItem] = [],
                 muted: Bool = true, sceneFPS: Int = LibraryState.defaultSceneFPS, sceneZoom: Double = 1.0, sameForBoth: Bool = true,
@@ -191,7 +207,7 @@ public struct LibraryState: Codable, Equatable, Sendable {
     // MARK: Codable with v1 migration (schema 1 files have no desktop/lock sections)
 
     private enum CodingKeys: String, CodingKey {
-        case schema, revision, videos, muted, sceneFPS, sceneZoom, sameForBoth, desktop, lock, sceneOptions, power
+        case schema, revision, videos, muted, sceneFPS, sceneZoom, sameForBoth, desktop, lock, sceneOptions, power, playlists
         // schema 1 only
         case selectedID, rotateEnabled, intervalValue, intervalUnit, applyToDesktop, applyToLockScreen
     }
@@ -206,6 +222,7 @@ public struct LibraryState: Codable, Equatable, Sendable {
         sceneZoom = LibraryState.clampedSceneZoom(try c.decodeIfPresent(Double.self, forKey: .sceneZoom) ?? 1.0)
         sceneOptions = try c.decodeIfPresent([String: SceneOptions].self, forKey: .sceneOptions) ?? [:]
         power = try c.decodeIfPresent(PowerOptions.self, forKey: .power) ?? PowerOptions()
+        playlists = try c.decodeIfPresent([SavedPlaylist].self, forKey: .playlists) ?? []
         if diskSchema >= 2 || c.contains(.desktop) {
             muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? true
             sameForBoth = try c.decodeIfPresent(Bool.self, forKey: .sameForBoth) ?? true
@@ -241,6 +258,7 @@ public struct LibraryState: Codable, Equatable, Sendable {
         try c.encode(sceneZoom, forKey: .sceneZoom)
         try c.encode(sceneOptions, forKey: .sceneOptions)
         try c.encode(power, forKey: .power)
+        try c.encode(playlists, forKey: .playlists)
         try c.encode(sameForBoth, forKey: .sameForBoth)
         try c.encode(desktop, forKey: .desktop)
         try c.encode(lock, forKey: .lock)
@@ -335,6 +353,54 @@ public struct LibraryState: Codable, Equatable, Sendable {
             lock.enabled = true
         }
         normalize()
+    }
+
+    // MARK: Saved playlists
+
+    /// Creates or updates `list` (unknown library ids dropped). Targets already running it pick up the change.
+    public mutating func savePlaylist(_ list: SavedPlaylist) {
+        var list = list
+        let valid = Set(videos.map(\.id))
+        list.itemIDs = list.itemIDs.filter { valid.contains($0) }
+        if let index = playlists.firstIndex(where: { $0.id == list.id }) { playlists[index] = list } else { playlists.append(list) }
+        for target in WallpaperTarget.allCases where config(for: target).playlistID == list.id { use(list, on: target) }
+        normalize()
+    }
+
+    /// Deletes `id`; targets that ran it go back to the whole library.
+    public mutating func deletePlaylist(_ id: UUID) {
+        playlists.removeAll { $0.id == id }
+        for target in WallpaperTarget.allCases where config(for: target).playlistID == id { use(nil, on: target) }
+        normalize()
+    }
+
+    /// Runs saved playlist `id` (nil = the whole library) on `requested`, enabling those targets. Like `assign`,
+    /// choosing one target separates it from the other; choosing both turns "same for both" on.
+    public mutating func applyPlaylist(_ id: UUID?, to requested: Set<WallpaperTarget>) {
+        let list = id.flatMap { id in playlists.first { $0.id == id } }
+        guard !requested.isEmpty, id == nil || list != nil else { return }
+        if requested.count == 1, sameForBoth {
+            normalize()
+            sameForBoth = false
+        }
+        if requested.count == WallpaperTarget.allCases.count { sameForBoth = true }
+        for target in requested {
+            use(list, on: target)
+            update(target) { $0.enabled = true }
+        }
+        normalize()
+    }
+
+    private mutating func update(_ target: WallpaperTarget, _ change: (inout TargetConfig) -> Void) {
+        if target == .desktop { change(&desktop) } else { change(&lock) }
+    }
+
+    private mutating func use(_ list: SavedPlaylist?, on target: WallpaperTarget) {
+        update(target) { config in
+            config.playlistID = list?.id
+            config.playlist = list?.itemIDs
+            if let ids = list?.itemIDs, !ids.contains(where: { $0 == config.selectedID }) { config.selectedID = ids.first }
+        }
     }
 
     // MARK: Phase-2 accessors (the desktop config, shared with the lock screen while sameForBoth)

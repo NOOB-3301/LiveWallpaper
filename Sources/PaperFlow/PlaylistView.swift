@@ -1,30 +1,55 @@
 import SwiftUI
 import AppKit
 import Core
-import UniformTypeIdentifiers
 
-// The Playlists page. Each screen (Desktop, Lock Screen) gets its own ordered list of wallpapers plus
-// its rotation settings. The storage is TargetConfig.playlist in state.json (nil = the whole library in
-// library order); every edit goes through SettingsModel.setPlaylist, so the service stays the only writer.
+// The Playlists page. Playlists are named, ordered sets of library wallpapers saved in state.json
+// (LibraryState.playlists). "New Playlist" opens a sheet: pick wallpapers, name it, optionally apply it. Each
+// screen (Desktop, Lock Screen) runs one saved playlist (TargetConfig.playlistID) or the whole library, plus
+// its rotation settings. Every edit goes through SettingsModel, so the service stays the only writer.
+
+/// What the editor sheet opens with: an existing playlist, or a new one seeded with `seed` ids.
+private struct PlaylistDraft: Identifiable {
+    let id = UUID()
+    var existing: SavedPlaylist? = nil
+    var seed: [UUID] = []
+    var applyTo: Set<WallpaperTarget> = []
+}
 
 @MainActor
 struct PlaylistView: View {
     @ObservedObject var model: SettingsModel
     @State private var tab: WallpaperTarget = .desktop
+    @State private var draft: PlaylistDraft?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: LWTheme.sectionSpacing) {
                 LWPageHeader(title: "Playlists",
-                             subtitle: "Choose the wallpapers that rotate on each screen, and in what order.")
-                PlaylistSegmentedControl(selection: $tab)
-                PlaylistTargetPane(model: model, target: tab)
+                             subtitle: "Group wallpapers into playlists, then choose what each screen plays.") {
+                    Button { draft = PlaylistDraft() } label: {
+                        Label("New Playlist", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.videos.isEmpty)
+                    .help(model.videos.isEmpty ? "Add wallpapers to your library first." : "Pick wallpapers, name them, and apply.")
+                }
+
+                PlaylistLibrarySection(model: model, draft: $draft)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("On your screens").font(.title3.weight(.semibold))
+                    PlaylistSegmentedControl(selection: $tab)
+                    PlaylistTargetPane(model: model, target: tab) { draft = $0 }
+                }
             }
             .padding(LWTheme.contentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.visible)
         .animation(LWMotion.content, value: tab)
+        .sheet(item: $draft) { draft in
+            PlaylistEditorSheet(model: model, draft: draft)
+        }
     }
 }
 
@@ -76,19 +101,147 @@ private struct PlaylistSegmentedControl: View {
     }
 }
 
+// MARK: - Saved playlists
+
+@MainActor
+private struct PlaylistLibrarySection: View {
+    @ObservedObject var model: SettingsModel
+    @Binding var draft: PlaylistDraft?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if model.playlists.isEmpty {
+                emptyState
+            } else {
+                let running = Dictionary(uniqueKeysWithValues: WallpaperTarget.allCases.map {
+                    ($0, model.activePlaylist(for: $0)?.id)
+                })
+                ForEach(model.playlists) { list in
+                    PlaylistCard(model: model, list: list,
+                                 runningOn: WallpaperTarget.allCases.filter { running[$0] == list.id }) {
+                        draft = PlaylistDraft(existing: list)
+                    }
+                }
+            }
+        }
+        .animation(LWMotion.content, value: model.playlists)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "list.bullet.rectangle")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("No playlists yet").font(.headline)
+            Text("Create one to pick wallpapers, name it, and play it on your desktop or lock screen.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Create Playlist") { draft = PlaylistDraft() }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.videos.isEmpty)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity)
+        .background { glassShape(radius: LWTheme.cardRadius) }
+    }
+}
+
+@MainActor
+private struct PlaylistCard: View {
+    @ObservedObject var model: SettingsModel
+    let list: SavedPlaylist
+    let runningOn: [WallpaperTarget]
+    let onEdit: () -> Void
+    @State private var confirmDelete = false
+
+    private var items: [VideoItem] {
+        list.itemIDs.compactMap { id in model.videos.first { $0.id == id } }
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: -10) {
+                ForEach(Array(items.prefix(4).enumerated()), id: \.element.id) { index, item in
+                    ItemThumbnail(item: item, broken: model.brokenIDs.contains(item.id),
+                                  showsHoverPreview: false, cornerRadius: 6, size: .row)
+                        .frame(width: 64, height: 36)
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2))
+                        .zIndex(Double(-index))
+                }
+            }
+            .frame(minWidth: 64, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(list.name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 5) {
+                    Text("\(items.count) \(items.count == 1 ? "wallpaper" : "wallpapers")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(runningOn, id: \.self) { target in
+                        LWChip(text: target == .desktop ? "Desktop" : "Lock Screen",
+                               tint: .accentColor, filled: true, icon: "checkmark")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                Button("Desktop") { model.applyPlaylist(list.id, to: [.desktop]) }
+                Button("Lock Screen") { model.applyPlaylist(list.id, to: [.lock]) }
+                Button("Desktop & Lock Screen") { model.applyPlaylist(list.id, to: [.desktop, .lock]) }
+            } label: {
+                Label("Apply", systemImage: "checkmark.circle")
+            }
+            .menuStyle(.button)
+            .controlSize(.small)
+            .fixedSize()
+            .disabled(items.isEmpty)
+
+            Button(action: onEdit) { Image(systemName: "pencil") }
+                .controlSize(.small)
+                .help("Edit playlist")
+                .accessibilityLabel("Edit \(list.name)")
+            Button { confirmDelete = true } label: { Image(systemName: "trash") }
+                .controlSize(.small)
+                .help("Delete playlist")
+                .accessibilityLabel("Delete \(list.name)")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { glassShape(radius: LWTheme.cardRadius) }
+        .contextMenu {
+            Button("Edit…", action: onEdit)
+            Button("Delete", role: .destructive) { confirmDelete = true }
+        }
+        .confirmationDialog("Delete “\(list.name)”?", isPresented: $confirmDelete) {
+            Button("Delete Playlist", role: .destructive) { model.deletePlaylist(list.id) }
+        } message: {
+            Text(runningOn.isEmpty
+                 ? "Your wallpapers stay in the library."
+                 : "Screens playing it go back to the whole library. Your wallpapers stay in the library.")
+        }
+    }
+}
+
 // MARK: - Per-target pane
 
 @MainActor
 private struct PlaylistTargetPane: View {
     @ObservedObject var model: SettingsModel
     let target: WallpaperTarget
+    let openEditor: (PlaylistDraft) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if target == .lock, model.sameForBoth {
                 followCard
             } else {
-                PlaylistEditorCard(model: model, target: target)
+                activeCard
                 rotationCard
                 if target == .desktop, model.sameForBoth {
                     Label("The lock screen follows this playlist while “Same wallpaper for both” is on.",
@@ -109,23 +262,74 @@ private struct PlaylistTargetPane: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("The lock screen plays the desktop playlist.")
                     .font(.callout.weight(.medium))
-                Text("Make it separate to choose its own wallpapers.")
+                Text("Make it separate to choose its own playlist.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button("Use Separate Playlist") {
-                let current = model.playlistItems(for: .lock).map(\.id)
-                model.setPlaylist(current, for: .lock)
-            }
-            .controlSize(.small)
+            Button("Use Separate Playlist") { model.setSameForBoth(false) }
+                .controlSize(.small)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background { glassShape(radius: LWTheme.cardRadius) }
     }
 
-    /// Rotation is a property of a curated playlist; without one there is nothing to show but the hint.
+    /// Both screens move together while they share one config.
+    private var targets: Set<WallpaperTarget> { target == .desktop && model.sameForBoth ? [.desktop, .lock] : [target] }
+    private var active: SavedPlaylist? { model.activePlaylist(for: target) }
+    private var customIDs: [UUID]? { active == nil ? model.playlistIDs(for: target) : nil }
+
+    private var activeCard: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(target == .desktop ? "Desktop plays" : "Lock Screen plays")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(activeTitle).font(.title3.weight(.semibold))
+                Text(activeSubtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if let custom = customIDs {
+                Button("Save as Playlist…") {
+                    openEditor(PlaylistDraft(seed: custom, applyTo: targets))
+                }
+                .controlSize(.small)
+            }
+            Menu("Change") {
+                Button { model.applyPlaylist(nil, to: targets) } label: {
+                    Label("All wallpapers", systemImage: model.playlistIDs(for: target) == nil ? "checkmark" : "")
+                }
+                if !model.playlists.isEmpty { Divider() }
+                ForEach(model.playlists) { list in
+                    Button { model.applyPlaylist(list.id, to: targets) } label: {
+                        Label(list.name, systemImage: active?.id == list.id ? "checkmark" : "")
+                    }
+                }
+                Divider()
+                Button("New Playlist…") { openEditor(PlaylistDraft(applyTo: targets)) }
+            }
+            .menuStyle(.button)
+            .controlSize(.small)
+            .fixedSize()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { glassShape(radius: LWTheme.cardRadius) }
+    }
+
+    private var activeTitle: String {
+        if let active { return active.name }
+        return customIDs == nil ? "All wallpapers" : "Custom selection"
+    }
+
+    private var activeSubtitle: String {
+        let count = model.playlistItems(for: target).count
+        let noun = "\(count) \(count == 1 ? "wallpaper" : "wallpapers")"
+        return customIDs == nil && active == nil ? "\(noun) · library order" : noun
+    }
+
+    /// Rotation is a property of a chosen playlist; with the whole library there is nothing to show but the hint.
     @ViewBuilder private var rotationCard: some View {
         if model.playlistIDs(for: target) != nil {
             InspectorSection(title: "Rotation") {
@@ -139,7 +343,7 @@ private struct PlaylistTargetPane: View {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.tertiary)
-                Text("Start a playlist above to rotate wallpapers.")
+                Text("Apply a playlist to rotate wallpapers.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
@@ -151,229 +355,35 @@ private struct PlaylistTargetPane: View {
     }
 }
 
-// MARK: - Editor card
+// MARK: - Editor sheet
 
+/// Create or edit a playlist: every library wallpaper is listed, picking numbers it in play order.
 @MainActor
-private struct PlaylistEditorCard: View {
+private struct PlaylistEditorSheet: View {
     @ObservedObject var model: SettingsModel
-    let target: WallpaperTarget
-    @State private var addSheet = false
-    @State private var dragID: UUID?
-    @State private var ids: [UUID] = []          // live copy, committed on drop
-
-    private var storedIDs: [UUID]? { model.playlistIDs(for: target) }
-    private var isCustom: Bool { storedIDs != nil }
-    private var items: [VideoItem] { model.playlistItems(for: target) }
-    private var playingID: UUID? { model.isRunning ? model.currentID(for: target) : nil }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(target == .desktop ? "Desktop playlist" : "Lock Screen playlist")
-                        .font(.title3.weight(.semibold))
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                Toggle("Custom order", isOn: customBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help("Choose wallpapers and the order they play in.")
-                if isCustom {
-                    Button { addSheet = true } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                    .controlSize(.small)
-                }
-            }
-
-            if isCustom {
-                if items.isEmpty { emptyRow } else { rows }
-            } else {
-                Text("Start a playlist and add wallpapers to play them in your own order.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background { glassShape(radius: LWTheme.cardRadius) }
-        .sheet(isPresented: $addSheet) {
-            PlaylistAddSheet(model: model, target: target) { added in
-                model.setPlaylist((storedIDs ?? []) + added, for: target)
-            }
-        }
-        .onAppear { ids = storedIDs ?? [] }
-        .onChange(of: storedIDs ?? []) { _, stored in ids = stored }
-        .animation(LWMotion.content, value: isCustom)
-    }
-
-    private var subtitle: String {
-        guard isCustom else { return "No playlist yet" }
-        let count = items.count
-        return count == 0 ? "Empty" : "\(count) \(count == 1 ? "wallpaper" : "wallpapers") · drag to reorder"
-    }
-
-    /// Turning custom order on starts from the order the screen shows today.
-    private var customBinding: Binding<Bool> {
-        Binding(
-            get: { isCustom },
-            set: { on in
-                model.setPlaylist(on ? items.map(\.id) : nil, for: target)
-            })
-    }
-
-    // MARK Rows
-
-    private var rows: some View {
-        VStack(spacing: 2) {
-            ForEach(Array(ids.enumerated()), id: \.element) { index, id in
-                if let item = model.videos.first(where: { $0.id == id }) {
-                    row(item, at: index)
-                        .onDrag {
-                            dragID = id
-                            return NSItemProvider(object: id.uuidString as NSString)
-                        }
-                        .onDrop(of: [.text],
-                                delegate: PlaylistDropDelegate(targetID: id, ids: $ids, dragID: $dragID) {
-                                    model.setPlaylist($0, for: target)
-                                })
-                }
-            }
-        }
-        .animation(.easeOut(duration: 0.2), value: ids)
-    }
-
-    private func row(_ item: VideoItem, at index: Int) -> some View {
-        HStack(spacing: 12) {
-            Text(String(format: "%02d", index + 1))
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .frame(width: 22, alignment: .trailing)
-
-            ItemThumbnail(item: item,
-                          broken: model.brokenIDs.contains(item.id),
-                          showsHoverPreview: false, cornerRadius: 6, size: .row)
-                .frame(width: 72, height: 41)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 5) {
-                    if let info = item.scene {
-                        SceneSupportBadge(info: info)
-                    } else {
-                        LWChip(text: "Video")
-                    }
-                    if item.id == playingID {
-                        LWChip(text: "Now playing", tint: .accentColor, filled: true, icon: "waveform")
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.tertiary)
-
-            Button {
-                model.setPlaylist(ids.filter { $0 != item.id }, for: target)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.tertiary)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Remove from playlist")
-            .accessibilityLabel("Remove \(item.name) from playlist")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(dragID == item.id ? Color.primary.opacity(0.07) : .clear)
-        }
-        .opacity(dragID == item.id ? 0.65 : 1)
-    }
-
-    private var emptyRow: some View {
-        HStack(spacing: 10) {
-            Text("This playlist is empty — add some wallpapers.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Button("Add Wallpapers…") { addSheet = true }
-                .controlSize(.small)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 12)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.22),
-                              style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
-        }
-    }
-}
-
-/// Moves the dragged row as the pointer crosses other rows; commits the new order once, on drop.
-private struct PlaylistDropDelegate: DropDelegate {
-    let targetID: UUID
-    @Binding var ids: [UUID]
-    @Binding var dragID: UUID?
-    let commit: ([UUID]) -> Void
-
-    func dropEntered(info: DropInfo) {
-        guard let dragged = dragID, dragged != targetID,
-              let from = ids.firstIndex(of: dragged),
-              let to = ids.firstIndex(of: targetID) else { return }
-        withAnimation(.easeOut(duration: 0.22)) {
-            ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        let settled = ids
-        dragID = nil
-        commit(settled)
-        return true
-    }
-}
-
-// MARK: - Add sheet
-
-@MainActor
-private struct PlaylistAddSheet: View {
-    @ObservedObject var model: SettingsModel
-    let target: WallpaperTarget
-    let onAdd: ([UUID]) -> Void
+    let draft: PlaylistDraft
     @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var picked: [UUID] = []        // play order
     @State private var searchText = ""
-    @State private var selected: Set<UUID> = []
+    @State private var applyTo: Set<WallpaperTarget> = []
 
-    private var inPlaylist: Set<UUID> { Set(model.playlistIDs(for: target) ?? []) }
+    private var isNew: Bool { draft.existing == nil }
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var candidates: [VideoItem] {
-        model.videos
-            .filter { !inPlaylist.contains($0.id) }
-            .filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) }
+    private var visible: [VideoItem] {
+        model.videos.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    private var allVisiblePicked: Bool {
+        !visible.isEmpty && visible.allSatisfy { picked.contains($0.id) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Add to \(target == .desktop ? "Desktop" : "Lock Screen") Playlist")
-                    .font(.headline)
+                Text(isNew ? "New Playlist" : "Edit Playlist").font(.headline)
+                TextField("Playlist name", text: $name)
+                    .textFieldStyle(.roundedBorder)
                 LWSearchField(prompt: "Search your library", text: $searchText)
             }
             .padding(16)
@@ -382,18 +392,16 @@ private struct PlaylistAddSheet: View {
 
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    if candidates.isEmpty {
-                        Text(searchText.isEmpty
-                             ? "Every wallpaper in your library is already in this playlist."
+                    if visible.isEmpty {
+                        Text(model.videos.isEmpty
+                             ? "Your library is empty."
                              : "Nothing in your library matches “\(searchText)”.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 30)
                     }
-                    ForEach(candidates) { item in
-                        candidateRow(item)
-                    }
+                    ForEach(visible) { item in candidateRow(item) }
                 }
                 .padding(.vertical, 8)
             }
@@ -401,39 +409,75 @@ private struct PlaylistAddSheet: View {
 
             Divider()
 
+            footer
+        }
+        .frame(width: 520, height: 600)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            let valid = Set(model.videos.map(\.id))
+            picked = (draft.existing?.itemIDs ?? draft.seed).filter { valid.contains($0) }
+            name = draft.existing?.name ?? "Playlist \(model.playlists.count + 1)"
+            applyTo = draft.applyTo
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 10) {
+            if isNew {
+                HStack(spacing: 14) {
+                    Text("Apply to").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Desktop", isOn: applyBinding(.desktop))
+                    Toggle("Lock Screen", isOn: applyBinding(.lock))
+                    Spacer()
+                }
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+            }
             HStack(spacing: 12) {
-                Text(selected.isEmpty ? "" : "\(selected.count) selected")
+                Button(allVisiblePicked ? "Deselect All" : "Select All") {
+                    if allVisiblePicked {
+                        let hidden = Set(visible.map(\.id))
+                        picked.removeAll { hidden.contains($0) }
+                    } else {
+                        picked += visible.map(\.id).filter { !picked.contains($0) }
+                    }
+                }
+                .controlSize(.small)
+                .disabled(visible.isEmpty)
+                Text(picked.isEmpty ? "Click wallpapers to add them in play order." : "\(picked.count) selected")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Add \(selected.isEmpty ? "" : "\(selected.count) ")Wallpaper\(selected.count == 1 ? "" : "s")") {
-                    // Library order, so the appended order is stable.
-                    let ordered = model.videos.filter { selected.contains($0.id) }.map(\.id)
-                    onAdd(ordered)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .disabled(selected.isEmpty)
+                Button(isNew ? (applyTo.isEmpty ? "Create Playlist" : "Create & Apply") : "Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(trimmedName.isEmpty || picked.isEmpty)
             }
-            .padding(14)
         }
-        .frame(width: 500, height: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(14)
+    }
+
+    private func applyBinding(_ target: WallpaperTarget) -> Binding<Bool> {
+        Binding(get: { applyTo.contains(target) },
+                set: { if $0 { applyTo.insert(target) } else { applyTo.remove(target) } })
+    }
+
+    private func save() {
+        let list = SavedPlaylist(id: draft.existing?.id ?? UUID(), name: trimmedName, itemIDs: picked)
+        model.savePlaylist(list)
+        if isNew, !applyTo.isEmpty { model.applyPlaylist(list.id, to: applyTo) }
+        dismiss()
     }
 
     private func candidateRow(_ item: VideoItem) -> some View {
-        let isSelected = selected.contains(item.id)
+        let position = picked.firstIndex(of: item.id)
         return Button {
-            if isSelected { selected.remove(item.id) } else { selected.insert(item.id) }
+            if position != nil { picked.removeAll { $0 == item.id } } else { picked.append(item.id) }
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
-                    .frame(width: 18)
+                badge(position)
                 ItemThumbnail(item: item,
                               broken: model.brokenIDs.contains(item.id),
                               showsHoverPreview: false, cornerRadius: 5, size: .row)
@@ -455,6 +499,22 @@ private struct PlaylistAddSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityLabel(item.name)
+        .accessibilityValue(position.map { "Position \($0 + 1)" } ?? "Not in playlist")
+        .accessibilityAddTraits(position != nil ? .isSelected : [])
+    }
+
+    @ViewBuilder private func badge(_ position: Int?) -> some View {
+        ZStack {
+            if let position {
+                Circle().fill(Color.accentColor)
+                Text("\(position + 1)")
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.white)
+            } else {
+                Circle().strokeBorder(Color.secondary.opacity(0.5), lineWidth: 1.5)
+            }
+        }
+        .frame(width: 20, height: 20)
     }
 }

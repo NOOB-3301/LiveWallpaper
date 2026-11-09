@@ -27,6 +27,8 @@ import SceneFormat
     @Published var applyToLockScreen: Bool = true { didSet { persist() } }
     /// The desktop's curated playlist; nil = the whole library in library order (TargetConfig.playlist).
     @Published var desktopPlaylistIDs: [VideoItem.ID]? = nil { didSet { persist() } }
+    @Published var desktopPlaylistID: UUID? = nil { didSet { persist() } }   // the saved playlist behind it
+    @Published var playlists: [SavedPlaylist] = [] { didSet { persist() } }
     // Schema v2. `selectedID`, `rotateEnabled`, `intervalValue`, `intervalUnit` and `applyToDesktop` above are
     // the DESKTOP config (shared with the lock screen while `sameForBoth`); `lockConfig` is the lock screen's own
     // config, used only while !sameForBoth, and its `enabled` is always `applyToLockScreen`. `sameForBoth` is
@@ -86,7 +88,7 @@ import SceneFormat
         state.videos = videos
         state.sameForBoth = sameForBoth
         state.desktop = TargetConfig(enabled: applyToDesktop, selectedID: selectedID, playlist: desktopPlaylistIDs,
-                                     rotateEnabled: rotateEnabled, intervalValue: intervalValue,
+                                     playlistID: desktopPlaylistID, rotateEnabled: rotateEnabled, intervalValue: intervalValue,
                                      intervalUnit: intervalUnit)
         var lock = lockConfig
         lock.enabled = applyToLockScreen
@@ -95,6 +97,7 @@ import SceneFormat
         state.sceneFPS = sceneFPS
         state.sceneOptions = sceneOptions
         state.power = power
+        state.playlists = playlists
         state.normalize()
         return state
     }
@@ -178,20 +181,29 @@ import SceneFormat
         snapshot.items(for: target)
     }
 
-    /// Writes the target's playlist (nil = use the entire library). Editing the lock screen's playlist
-    /// separates it from the desktop's; editing the desktop's keeps both in step while they are shared.
-    func setPlaylist(_ ids: [VideoItem.ID]?, for target: WallpaperTarget) {
+    /// The saved playlist `target` runs, if it runs one.
+    func activePlaylist(for target: WallpaperTarget) -> SavedPlaylist? {
+        guard let id = snapshot.config(for: target).playlistID else { return nil }
+        return playlists.first { $0.id == id }
+    }
+
+    /// Creates or updates a saved playlist; screens already running it follow the change.
+    func savePlaylist(_ list: SavedPlaylist) {
         var state = snapshot
-        let valid = Set(state.videos.map(\.id))
-        let pruned = ids.map { $0.filter { valid.contains($0) } }
-        if target == .lock, state.sameForBoth {
-            let lockEnabled = state.lock.enabled
-            state.lock = state.desktop          // the lock screen keeps what it showed so far…
-            state.lock.enabled = lockEnabled
-            state.sameForBoth = false           // …and from here on goes its own way
-        }
-        if target == .desktop { state.desktop.playlist = pruned } else { state.lock.playlist = pruned }
-        state.normalize()
+        state.savePlaylist(list)
+        batch { apply(state) }
+    }
+
+    func deletePlaylist(_ id: UUID) {
+        var state = snapshot
+        state.deletePlaylist(id)
+        batch { apply(state) }
+    }
+
+    /// Runs a saved playlist (nil = the whole library) on `targets`. Commits through the service; starts nothing.
+    func applyPlaylist(_ id: UUID?, to targets: Set<WallpaperTarget>) {
+        var state = snapshot
+        state.applyPlaylist(id, to: targets)
         guard state != snapshot else { return }
         batch { apply(state) }
     }
@@ -289,6 +301,7 @@ import SceneFormat
             videos.removeAll { ids.contains($0.id) }
             desktopPlaylistIDs = desktopPlaylistIDs?.filter { !ids.contains($0) }
             lockConfig.playlist = lockConfig.playlist?.filter { !ids.contains($0) }
+            playlists = playlists.map { SavedPlaylist(id: $0.id, name: $0.name, itemIDs: $0.itemIDs.filter { !ids.contains($0) }) }
             if selectedItem == nil {
                 selectedID = videos.isEmpty ? nil : videos[min(firstIndex, videos.count - 1)].id
             }
@@ -397,6 +410,8 @@ import SceneFormat
         applyToDesktop = state.applyToDesktop
         applyToLockScreen = state.applyToLockScreen
         desktopPlaylistIDs = state.desktop.playlist
+        desktopPlaylistID = state.desktop.playlistID
+        playlists = state.playlists
         sameForBoth = state.sameForBoth
         lockConfig = state.lock
         sceneFPS = state.sceneFPS

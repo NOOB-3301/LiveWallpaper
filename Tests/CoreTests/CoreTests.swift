@@ -115,6 +115,38 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(state.hasMultipleItems(.desktop))
     }
 
+    func testSavedPlaylistApplySaveDelete() throws {
+        let a = VideoItem(path: "/a.mp4"), b = VideoItem(path: "/b.mp4"), c = VideoItem(path: "/c.mp4")
+        var state = LibraryState(videos: [a, b, c], desktop: TargetConfig(selectedID: a.id))
+        let list = SavedPlaylist(name: "Mix", itemIDs: [c.id, b.id, UUID()])
+        state.savePlaylist(list)
+        XCTAssertEqual(state.playlists.first?.itemIDs, [c.id, b.id], "unknown ids dropped")
+
+        state.applyPlaylist(list.id, to: [.lock])         // one target separates it from the other
+        XCTAssertFalse(state.sameForBoth)
+        XCTAssertEqual(state.items(for: .lock).map(\.id), [c.id, b.id])
+        XCTAssertEqual(state.lock.selectedID, c.id, "selection moves into the playlist")
+        XCTAssertNil(state.desktop.playlistID)
+
+        state.savePlaylist(SavedPlaylist(id: list.id, name: "Mix", itemIDs: [b.id]))   // edit follows the screen
+        XCTAssertEqual(state.items(for: .lock).map(\.id), [b.id])
+
+        state.applyPlaylist(list.id, to: [.desktop, .lock])
+        XCTAssertTrue(state.sameForBoth)
+        XCTAssertEqual(state.items(for: .desktop).map(\.id), [b.id])
+
+        state.deletePlaylist(list.id)
+        XCTAssertTrue(state.playlists.isEmpty)
+        XCTAssertNil(state.desktop.playlist)
+        XCTAssertEqual(state.items(for: .lock).count, 3)
+
+        // playlists + playlistID survive the file
+        state.savePlaylist(list); state.applyPlaylist(list.id, to: [.desktop, .lock])
+        let round = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(round.playlists, state.playlists)
+        XCTAssertEqual(round.desktop.playlistID, list.id)
+    }
+
     func testLockRenderCacheValidity() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lw-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
