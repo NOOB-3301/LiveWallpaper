@@ -260,6 +260,7 @@ struct LibraryView: View {
                              playing: plan.playing(of: item.id), render: renderStatus(of: item),
                              showInspector: $showInspector,
                              openSteamSetup: openSteamSetup, openPlaylists: openPlaylists,
+                             preview: { WallpaperPreviewController.shared.show(item, model: model) },
                              remove: { remove([item.id]) })
                     .id(item.id)
                     .transition(.opacity)
@@ -527,6 +528,7 @@ private struct LibraryStage: View {
     @Binding var showInspector: Bool
     let openSteamSetup: () -> Void
     let openPlaylists: () -> Void
+    let preview: () -> Void
     let remove: () -> Void
 
     @State private var width: CGFloat = 900
@@ -539,12 +541,12 @@ private struct LibraryStage: View {
         Group {
             if layout == .stacked {
                 VStack(alignment: .leading, spacing: 14) {
-                    preview.frame(width: previewWidth)
+                    previewStage.frame(width: previewWidth)
                     details
                 }
             } else {
                 HStack(alignment: .top, spacing: 22) {
-                    preview.frame(width: previewWidth)
+                    previewStage.frame(width: previewWidth)
                     details.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -560,12 +562,15 @@ private struct LibraryStage: View {
 
     // MARK: Preview
 
-    private var preview: some View {
+    private var previewStage: some View {
         ZStack(alignment: .bottom) {
             ItemPreviewPane(item: item, broken: broken, openSteamSetup: openSteamSetup, showsNotes: false)
                 .frame(maxWidth: .infinity)
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .onTapGesture { if !broken { preview() } }
+                .help(broken ? "" : "Click to preview full screen (⌘Y)")
                 .overlay {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
@@ -654,6 +659,13 @@ private struct LibraryStage: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(isPlaying ? .red : nil)
+
+            Button(action: preview) {
+                Label("Preview", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .keyboardShortcut("y", modifiers: .command)
+            .disabled(broken)
+            .help("Preview this wallpaper full screen (⌘Y). Esc or Space closes it.")
 
             if item.isScene {
                 Button {
