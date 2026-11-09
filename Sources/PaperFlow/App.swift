@@ -130,7 +130,9 @@ struct RootView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var workshop: WorkshopModel
     @State private var selection: SidebarSelection = .all
-    @State private var showInspector = true
+    // The inspector holds only per-wallpaper extras now (scene settings, details), so it starts closed. The Scene
+    // settings button on the stage opens it, and the choice is remembered.
+    @AppStorage("LiveWallpaper.library.inspector") private var showInspector = false
     /// Set the first time the Workshop is opened. From then on its view stays in the tree (hidden while another page
     /// shows), so coming back finds the scroll position, open detail pane and half-typed search where they were.
     @State private var workshopVisited = false
@@ -316,7 +318,8 @@ struct RootView: View {
                         filter: selection.libraryFilter,
                         showInspector: $showInspector,
                         openWorkshop: { selection = .workshop },
-                        openSteamSetup: { selection = .steamSetup })
+                        openSteamSetup: { selection = .steamSetup },
+                        openPlaylists: { selection = .playlists })
                 .lwInspector(isPresented: $showInspector) {
                     LibraryInspectorView(model: model,
                                          item: focusedLibraryItem,
