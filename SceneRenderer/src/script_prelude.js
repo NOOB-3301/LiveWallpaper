@@ -201,9 +201,11 @@ class Layer {
 	set text(v) { this._s.text = String(v); __mark(this, 'text', this._s.text); }
 	get parallaxDepth() { return Vec2.fromString(this._s.parallaxDepth || '0 0'); }
 	set parallaxDepth(v) { this._s.parallaxDepth = __fromScript(__vec2(v)); __mark(this, 'parallaxDepth', this._s.parallaxDepth); }
-	// Kept for scripts that set it; this renderer centres layers on their origin.
 	get alignment() { return this._s.alignment || 'center'; }
-	set alignment(v) { this._s.alignment = String(v); }
+	set alignment(v) {
+		const a = String(v);
+		if (a !== this.alignment) { this._s.alignment = a; __mark(this, 'alignment', a); }
+	}
 	getEffectCount() { return (this._s.effects || []).length; }
 	getEffect(key) {
 		const list = this._s.effects || [];

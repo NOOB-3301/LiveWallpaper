@@ -54,6 +54,36 @@ fragment float4 lw_particle_fs(VOut i [[stage_in]], texture2d<float> t [[texture
     float4 c = t.sample(s, i.uv);
     return float4(c.rgb * i.col.rgb, c.a * i.col.a);
 }
+// REFRACT particles (raindrops on glass): the sprite tints the frame behind it, shifted by the
+// sprite's normal map, scaled by the map's mask and the particle's alpha. The shift is measured
+// in the sprite's own size on screen, so a drop bends what lies within its own radius.
+// `u.nscale` maps the sprite's texcoords into the normal map's; `u.cell` is one sheet frame's
+// size in texcoords (1 1 without a sheet).
+struct RefractU { float2 nscale; float2 cell; };
+fragment float4 lw_particle_refract_fs(VOut i [[stage_in]], texture2d<float> t [[texture(0)]],
+                                       sampler s [[sampler(0)]],
+                                       texture2d<float> nm [[texture(1)]],
+                                       texture2d<float> frame [[texture(2)]],
+                                       constant RefractU& u [[buffer(0)]]) {
+    float4 c = t.sample(s, i.uv) * i.col;
+    // RGBA8 normal maps keep x in alpha, y in green and the refraction mask in red.
+    float4 n = nm.sample(s, i.uv * u.nscale);
+    float2 nxy = float2(n.a, n.g) * 2.0 - 1.0;
+    // Pixels per texcoord along the sprite's u and v axes: the inverse of the texcoord change
+    // per pixel. Times one frame's texcoord size, that is the sprite's extent on screen.
+    float2 dx = dfdx(i.uv), dy = dfdy(i.uv);
+    float det = dx.x * dy.y - dx.y * dy.x;
+    float2 off = float2(0.0);
+    if (abs(det) > 1e-12) {
+        float2 across = float2(dy.y, -dx.y) / det * u.cell.x;
+        float2 down = float2(-dy.x, dx.x) / det * u.cell.y;
+        off = (across * nxy.x - down * nxy.y) * 0.5 * n.r * i.col.a;
+    }
+    constexpr sampler fs(filter::linear, address::clamp_to_edge);
+    float2 size = float2(frame.get_width(), frame.get_height());
+    float3 behind = frame.sample(fs, (i.pos.xy + off) / size).rgb;
+    return float4(c.rgb * behind, c.a);
+}
 "#;
 
 const COMPOSITE_MSL: &str = r#"
@@ -115,7 +145,7 @@ pub struct Gpu {
     composite_lib: Retained<ProtocolObject<dyn MTLLibrary>>,
     blur: HashMap<(&'static str, usize), Retained<Pipeline>>,
     blur_lib: Retained<ProtocolObject<dyn MTLLibrary>>,
-    particle: HashMap<(Blend, MTLPixelFormat, usize), Retained<Pipeline>>,
+    particle: HashMap<(Blend, MTLPixelFormat, usize, bool), Retained<Pipeline>>,
     particle_lib: Retained<ProtocolObject<dyn MTLLibrary>>,
 }
 
@@ -434,18 +464,27 @@ impl Gpu {
     }
 
     /// Pipeline for particle quads, one draw per particle system.
+    /// With `refract`, the fragment stage also reads a normal map and the frame behind.
     pub fn particle_pipeline(
         &mut self,
         blend: Blend,
         format: MTLPixelFormat,
         samples: usize,
+        refract: bool,
     ) -> Result<Retained<Pipeline>, Error> {
-        let key = (blend, format, samples);
+        let key = (blend, format, samples, refract);
         if let Some(p) = self.particle.get(&key) {
             return Ok(p.clone());
         }
         let vs = function(&self.particle_lib, "lw_particle_vs")?;
-        let fs = function(&self.particle_lib, "lw_particle_fs")?;
+        let fs = function(
+            &self.particle_lib,
+            if refract {
+                "lw_particle_refract_fs"
+            } else {
+                "lw_particle_fs"
+            },
+        )?;
         let vd = MTLVertexDescriptor::new();
         for (i, (format, offset)) in [
             (MTLVertexFormat::Float2, 0),
