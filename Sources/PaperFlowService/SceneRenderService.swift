@@ -26,13 +26,19 @@ final class RendererBox: @unchecked Sendable {
     private var appliedFPS: Int?
     private var appliedScale: Double?
     private var appliedPaused: Bool?
+    private var appliedVisible: Bool?
     private var paused = false
+    private var locked = false
     /// The displays the renderer draws on.
     private var attached: [String] = []
 
     override init() {
         super.init()
         power.onChange = { [weak self] in
+            guard let self, let item = self.item, self.renderer != nil else { return }
+            self.push(item)
+        }
+        windows.onHiddenChange = { [weak self] in
             guard let self, let item = self.item, self.renderer != nil else { return }
             self.push(item)
         }
@@ -110,6 +116,7 @@ final class RendererBox: @unchecked Sendable {
         appliedFPS = nil
         appliedScale = nil
         appliedPaused = nil
+        appliedVisible = nil
     }
 
     /// The cursor drives parallax: its position on the main screen goes to the renderer, 0...1 with
@@ -177,7 +184,8 @@ final class RendererBox: @unchecked Sendable {
 
     /// The lock screen covers the desktop: nothing is drawn and nothing is heard.
     override func setScreenLocked(_ locked: Bool) {
-        renderer?.setVisible(visible: !locked)
+        self.locked = locked
+        if let item, renderer != nil { push(item) }
     }
 
     /// Sends the settings that changed since the last push. Battery rules apply here: on battery
@@ -196,6 +204,8 @@ final class RendererBox: @unchecked Sendable {
             scale = min(scale, rules.batteryRenderScale)
         }
         let pause = paused || (saving && rules.batteryMode == .pause)
+        // Locked, covered by other windows or on sleeping displays: draw nothing, hear nothing.
+        let visible = !locked && !windows.hidden
 
         if new.fitMode != old?.fitMode {
             renderer.setFitMode(mode: new.fitMode.renderer)
@@ -222,14 +232,18 @@ final class RendererBox: @unchecked Sendable {
         if pause != appliedPaused {
             if pause { renderer.pause() } else { renderer.play() }
         }
-        setAudioCapture(new.audioResponse && !pause)
+        if visible != appliedVisible {
+            renderer.setVisible(visible: visible)
+        }
+        setAudioCapture(new.audioResponse && !pause && visible)
         appliedScene = new
+        appliedVisible = visible
         appliedFPS = fps
         appliedScale = scale
         appliedPaused = pause
     }
 
-    /// System audio is captured only while a playing scene asks for audio response.
+    /// System audio is captured only while a visible, playing scene asks for audio response.
     private func setAudioCapture(_ on: Bool) {
         guard #available(macOS 14.2, *) else { return }
         if on, audio == nil, let renderer {
