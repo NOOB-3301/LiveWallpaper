@@ -278,6 +278,8 @@ struct LayerGpu {
 struct Placed {
     world: Mat4,
     size: [f32; 2],
+    /// Shift of the image centre from the layer origin (its `alignment`), in layer pixels.
+    anchor: [f32; 2],
     color: [f32; 3],
     alpha: f32,
     compose: bool,
@@ -289,6 +291,8 @@ struct ParticleGpu {
     layer: usize,
     sim: particles::Simulation,
     texture: Option<Rc<TexEntry>>,
+    /// Normal map of a `REFRACT` material: the sprites then bend the frame behind them.
+    normal: Option<Rc<TexEntry>>,
     blend: Blend,
     /// The layer's transform, in design units.
     world: Mat4,
@@ -311,6 +315,8 @@ struct PuppetGpu {
     indices: Retained<ProtocolObject<dyn MTLBuffer>>,
     texture: Option<Rc<TexEntry>>,
     blend: Blend,
+    /// Bind-pose mesh extent in design units, y up, `[x0, y0, x1, y1]`, with room for motion.
+    bounds: [f32; 4],
 }
 
 /// Values a frame needs.
@@ -929,6 +935,18 @@ impl Engine {
         }
         let bind_inverse = world.iter().map(mat::invert).collect();
         let animations = self.puppet_animations(&model, layer);
+        let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        for v in &model.vertices {
+            bounds = [
+                bounds[0].min(v.position[0]),
+                bounds[1].min(v.position[1]),
+                bounds[2].max(v.position[0]),
+                bounds[3].max(v.position[1]),
+            ];
+        }
+        // Animations swing pieces past the bind pose; a tenth of the extent covers usual motion.
+        let pad = [(bounds[2] - bounds[0]) * 0.1, (bounds[3] - bounds[1]) * 0.1];
+        let bounds = [bounds[0] - pad[0], bounds[1] - pad[1], bounds[2] + pad[0], bounds[3] + pad[1]];
         let (texture_name, blend) = self
             .scene
             .layers
@@ -959,6 +977,7 @@ impl Engine {
             indices,
             texture,
             blend,
+            bounds,
         })
     }
 
@@ -1018,7 +1037,7 @@ impl Engine {
         if verts.is_empty() || model.indices.is_empty() {
             return Ok(());
         }
-        let pipeline = self.gpu.particle_pipeline(blend, TARGET_FORMAT, samples)?;
+        let pipeline = self.gpu.particle_pipeline(blend, TARGET_FORMAT, samples, false)?;
         enc.setRenderPipelineState(&pipeline);
         let uniform: Vec<u8> = ctx.mvp.iter().flat_map(|f| f.to_le_bytes()).collect();
         gpu::set_bytes(enc, true, &uniform, 0);
@@ -1080,6 +1099,15 @@ impl Engine {
             .first()
             .and_then(|t| t.as_deref())
             .and_then(|t| self.texture(t));
+        let normal = if material.combos.get("REFRACT").copied().unwrap_or(0) != 0 {
+            material
+                .textures
+                .get(1)
+                .and_then(|t| t.as_deref())
+                .and_then(|t| self.texture_as(t, false))
+        } else {
+            None
+        };
         let scene_layer = &self.scene.layers[index];
         let mut color = [1.0f32; 3];
         for (o, v) in color
@@ -1092,6 +1120,7 @@ impl Engine {
             layer: index,
             sim,
             texture,
+            normal,
             blend: material.blend,
             world: self.world(index, 0),
             color,
@@ -1111,8 +1140,9 @@ impl Engine {
         view_projection: &Mat4,
         input: FrameInput,
         pointer: [f32; 2],
+        frame: Option<&Texture>,
     ) -> Result<(), Error> {
-        let (blend, texture, verts) = {
+        let (blend, texture, normal, verts) = {
             let Some(p) = self.particles.get_mut(index) else {
                 return Ok(());
             };
@@ -1190,14 +1220,15 @@ impl Engine {
                     }
                 }
             }
-            (p.blend, p.texture.clone(), verts)
+            (p.blend, p.texture.clone(), p.normal.clone(), verts)
         };
         if verts.is_empty() {
             return Ok(());
         }
-        let pipeline = self
-            .gpu
-            .particle_pipeline(blend, TARGET_FORMAT, self.samples)?;
+        let refract = normal.as_ref().zip(texture.as_ref()).zip(frame);
+        let pipeline =
+            self.gpu
+                .particle_pipeline(blend, TARGET_FORMAT, self.samples, refract.is_some())?;
         enc.setRenderPipelineState(&pipeline);
         let uniform: Vec<u8> = view_projection
             .iter()
@@ -1215,6 +1246,26 @@ impl Engine {
             Some(t) => (&t.images[0], t.sampler),
             None => (&self.white.images[0], 0),
         };
+        if let Some(((n, t), frame)) = refract {
+            let nscale = [t.res[0] / n.res[0].max(1.0), t.res[1] / n.res[1].max(1.0)];
+            let cell = t.frames.first().map_or([1.0, 1.0], |f| {
+                [
+                    f.width_x.hypot(f.width_y) / t.res[0].max(1.0),
+                    f.height_x.hypot(f.height_y) / t.res[1].max(1.0),
+                ]
+            });
+            let bytes: Vec<u8> = nscale
+                .iter()
+                .chain(&cell)
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
+            gpu::set_bytes(enc, false, &bytes, 0);
+            // SAFETY: slots 1 and 2 exist in the refract shader; both textures outlive the draw.
+            unsafe {
+                enc.setFragmentTexture_atIndex(Some(&n.images[0]), 1);
+                enc.setFragmentTexture_atIndex(Some(frame), 2);
+            }
+        }
         // SAFETY: slot 0 exists in the particle shader; resources outlive the frame.
         unsafe {
             enc.setFragmentTexture_atIndex(Some(tex), 0);
@@ -1503,6 +1554,7 @@ impl Engine {
         Some(Placed {
             world: self.world(index, 0),
             size,
+            anchor: [layer.alignment[0] * size[0], layer.alignment[1] * size[1]],
             color,
             alpha: floats(&layer.alpha.get(&self.props))
                 .first()
@@ -1789,19 +1841,33 @@ impl Engine {
                 if self.particles[pi].layer != li {
                     continue;
                 }
-                let enc = main
-                    .as_ref()
-                    .ok_or_else(|| Error::Metal("main pass".into()))?;
                 let vp = view_projection;
                 let pointer = [
                     l + input.pointer[0] * (r - l),
                     t + input.pointer[1] * (b - t),
                 ];
-                self.draw_particles(enc, pi, &vp, input, pointer)?;
+                if self.particles[pi].normal.is_some() {
+                    main = Some(self.copy_frame(
+                        cb,
+                        main.take(),
+                        scene_target,
+                        msaa.as_deref(),
+                        &mut frame_copy,
+                    )?);
+                }
+                let enc = main
+                    .as_ref()
+                    .ok_or_else(|| Error::Metal("main pass".into()))?;
+                let frame = frame_copy.get("_rt_FullFrameBuffer").cloned();
+                self.draw_particles(enc, pi, &vp, input, pointer, frame.as_deref())?;
+                if let Some(t) = frame_copy.remove("_rt_FullFrameBuffer") {
+                    self.pool.give(t);
+                }
             }
             let Some(Placed {
                 world,
                 size,
+                anchor,
                 color,
                 alpha,
                 compose,
@@ -1809,11 +1875,30 @@ impl Engine {
             else {
                 continue;
             };
+            // Children hang off the origin; only the layer's own image moves with its alignment.
+            let world = if anchor == [0.0; 2] {
+                world
+            } else {
+                mul(&world, &translate(anchor[0], anchor[1], 0.0))
+            };
             if self.layers[li].base.is_none() && self.layers[li].image.is_none() {
                 continue;
             }
             let image = self.layers[li].image.clone();
             let is_puppet = self.layers[li].puppet;
+            // A puppet's mesh may reach past its box and WE does not clip it there, so its quad
+            // (and effect buffer) spans both; `pc` is that span's centre in puppet units, y up.
+            let (world, size, pc) = match self.puppets.iter().find(|p| p.layer == li) {
+                Some(p) if is_puppet && p.bounds[0] <= p.bounds[2] => {
+                    let x0 = p.bounds[0].min(-size[0] / 2.0);
+                    let y0 = p.bounds[1].min(-size[1] / 2.0);
+                    let x1 = p.bounds[2].max(size[0] / 2.0);
+                    let y1 = p.bounds[3].max(size[1] / 2.0);
+                    let c = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+                    (mul(&world, &translate(c[0], -c[1], 0.0)), [x1 - x0, y1 - y0], c)
+                }
+                _ => (world, size, [0.0; 2]),
+            };
             let model = match self.layers[li].text_rect {
                 Some([x, y, w, h]) => {
                     // The quad is centred on the model origin, and the layer box is centred on
@@ -1906,7 +1991,10 @@ impl Engine {
                     _ if is_puppet => {
                         // Puppet vertices are in design units, y up: the layer transform without the
                         // box scale, flipped into the y-down design space.
-                        let flip = mul(&world, &scale(1.0, -1.0, 1.0));
+                        let flip = mul(
+                            &mul(&world, &translate(-pc[0], pc[1], 0.0)),
+                            &scale(1.0, -1.0, 1.0),
+                        );
                         let pctx = DrawCtx {
                             mvp: mul(&view_projection, &flip),
                             ..ctx
@@ -1994,7 +2082,10 @@ impl Engine {
                 scissor(&enc, &prev, clip);
                 if is_puppet {
                     // The buffer spans the layer box, so map design units (y up) onto the unit quad (y down).
-                    let inv = scale(1.0 / size[0].max(1.0), -1.0 / size[1].max(1.0), 1.0);
+                    let inv = mul(
+                        &scale(1.0 / size[0].max(1.0), -1.0 / size[1].max(1.0), 1.0),
+                        &translate(-pc[0], -pc[1], 0.0),
+                    );
                     let pctx = DrawCtx {
                         mvp: mul(&FBO_MVP, &inv),
                         color: [1.0; 3],
@@ -2232,6 +2323,7 @@ impl Engine {
             .iter()
             .flat_map(|l| l.base.iter().chain(&l.base_fx))
             .any(|i| i.reads_frame)
+            || self.particles.iter().any(|p| p.normal.is_some())
     }
 
     fn composite(

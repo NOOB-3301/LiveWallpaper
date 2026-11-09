@@ -97,6 +97,26 @@ impl Bound {
     }
 }
 
+/// An image's `alignment` as the shift from its origin to its centre, in sizes, y down.
+pub fn alignment(name: &str) -> [f32; 2] {
+    let name = name.to_ascii_lowercase();
+    let x = if name.contains("left") {
+        0.5
+    } else if name.contains("right") {
+        -0.5
+    } else {
+        0.0
+    };
+    let y = if name.contains("top") {
+        0.5
+    } else if name.contains("bottom") {
+        -0.5
+    } else {
+        0.0
+    };
+    [x, y]
+}
+
 pub fn truthy(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
@@ -279,6 +299,9 @@ pub struct Layer {
     pub scale: Bound,
     pub angles: Bound,
     pub size: [f32; 2],
+    /// Where `origin` sits on an image, as a shift of the image centre in sizes (y down):
+    /// `bottomleft` is `[0.5, -0.5]`, `center` is zero.
+    pub alignment: [f32; 2],
     pub parallax_depth: Bound,
     pub alpha: Bound,
     pub color: Bound,
@@ -560,6 +583,12 @@ impl Scene {
             scale: Bound::parse(obj.get("scale"), Value::String("1 1 1".into())),
             angles: Bound::parse(obj.get("angles"), Value::String("0 0 0".into())),
             size: vec_n(obj.get("size"), [0.0, 0.0]),
+            // Text lays itself out in its box; only images are anchored by `alignment`.
+            alignment: if text.is_some() {
+                [0.0; 2]
+            } else {
+                alignment(obj["alignment"].as_str().unwrap_or(""))
+            },
             parallax_depth: Bound::parse(obj.get("parallaxDepth"), Value::from("0 0")),
             alpha: Bound::parse(obj.get("alpha"), Value::from(1.0)),
             color: Bound::parse(obj.get("color"), Value::String("1 1 1".into())),

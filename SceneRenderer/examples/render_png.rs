@@ -48,6 +48,11 @@ fn main() {
         r.set_pointer(x, y);
     }
     r.resize(w, h);
+    // `LW_FRAMES=n` renders n-1 warm-up frames (1/30 s apart) first, so scripts settle.
+    let frames: u32 = std::env::var("LW_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    for i in 1..frames {
+        let _ = r.render_frame(time - f64::from(frames - i) / 30.0);
+    }
     let started = std::time::Instant::now();
     let mut px = r.render_frame(time).expect("render");
     println!("frame in {:?}", started.elapsed());

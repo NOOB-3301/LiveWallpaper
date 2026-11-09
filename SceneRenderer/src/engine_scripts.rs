@@ -244,14 +244,15 @@ impl Engine {
         for (field, value) in events.scene {
             self.set_scene_field(&field, value);
         }
+        // Create layers first: a script's `init` usually places the layers it just created.
+        if !events.created.is_empty() || !events.moves.is_empty() {
+            self.restructure(&events.created, &events.moves);
+            changes.rebuild = true;
+        }
         for (layer_id, fields) in events.dirty {
             for (field, value) in fields {
                 self.set_field(layer_id, &field, value, &mut changes);
             }
-        }
-        if !events.created.is_empty() || !events.moves.is_empty() {
-            self.restructure(&events.created, &events.moves);
-            changes.rebuild = true;
         }
         if changes.rebuild {
             self.rebuild();
@@ -352,6 +353,13 @@ impl Engine {
                 };
                 if slot.get(props) != value {
                     *slot = fixed(value);
+                    changes.place = true;
+                }
+            }
+            "alignment" => {
+                let a = crate::scene::alignment(value.as_str().unwrap_or(""));
+                if layer.text.is_none() && layer.alignment != a {
+                    layer.alignment = a;
                     changes.place = true;
                 }
             }
