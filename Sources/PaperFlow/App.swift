@@ -130,7 +130,13 @@ struct RootView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var workshop: WorkshopModel
     @State private var selection: SidebarSelection = .all
-    @State private var showInspector = true
+    // The inspector holds only per-wallpaper extras now (scene settings, details), so it starts closed. The Scene
+    // settings button on the stage opens it, and the choice is remembered.
+    @AppStorage("LiveWallpaper.library.inspector") private var showInspector = false
+    /// Set the first time the Workshop is opened. From then on its view stays in the tree (hidden while another page
+    /// shows), so coming back finds the scroll position, open detail pane and half-typed search where they were.
+    @State private var workshopVisited = false
+    @State private var showLinkLookup = false
 
     var body: some View {
         NavigationSplitView {
@@ -141,6 +147,7 @@ struct RootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
+        .onChange(of: selection) { _, new in if new == .workshop { workshopVisited = true } }
     }
 
     // MARK: Sidebar
@@ -235,6 +242,26 @@ struct RootView: View {
                     .keyboardShortcut("i", modifiers: [.command, .option])
                 }
             }
+            // The Workshop's own controls live here, not in WorkshopView: that view stays alive (hidden) once opened,
+            // and a hidden view would keep contributing toolbar items to every other page.
+            if selection == .workshop {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showLinkLookup.toggle() } label: { Image(systemName: "link") }
+                        .help("Look up a Workshop link or item number (⌘L)")
+                        .accessibilityLabel("Look up a Workshop link")
+                        .keyboardShortcut("l", modifiers: .command)
+                        .popover(isPresented: $showLinkLookup, arrowEdge: .bottom) {
+                            WorkshopLinkPopover(
+                                workshop: workshop, model: model,
+                                openSteamSetup: { showLinkLookup = false; selection = .steamSetup },
+                                openLibrary: { showLinkLookup = false; selection = .all },
+                                openDetail: { item in showLinkLookup = false; workshop.detailRequest = item })
+                        }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    WorkshopToolbarSearch(text: $workshop.searchText)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 if workshop.hasActiveDownloads {
                     Button {
@@ -266,14 +293,33 @@ struct RootView: View {
         }
     }
 
+    /// The Workshop view is the one page that is never torn down once it has been opened: rebuilding it would start a
+    /// new scroll view at the top. The other pages are rebuilt on every visit, as before.
     @ViewBuilder private var content: some View {
+        let onWorkshop = selection == .workshop
+        ZStack {
+            if workshopVisited || onWorkshop {
+                WorkshopView(model: model, workshop: workshop,
+                             openSteamSetup: { selection = .steamSetup },
+                             openLibrary: { selection = .all })
+                    .opacity(onWorkshop ? 1 : 0)
+                    .allowsHitTesting(onWorkshop)
+                    .accessibilityHidden(!onWorkshop)
+                    .disabled(!onWorkshop)   // a hidden page must not keep the keyboard focus or its shortcuts
+            }
+            if !onWorkshop { otherPage }
+        }
+    }
+
+    @ViewBuilder private var otherPage: some View {
         switch selection {
         case .all, .desktop, .lockScreen, .scenes:
             LibraryView(model: model,
                         filter: selection.libraryFilter,
                         showInspector: $showInspector,
                         openWorkshop: { selection = .workshop },
-                        openSteamSetup: { selection = .steamSetup })
+                        openSteamSetup: { selection = .steamSetup },
+                        openPlaylists: { selection = .playlists })
                 .lwInspector(isPresented: $showInspector) {
                     LibraryInspectorView(model: model,
                                          item: focusedLibraryItem,
@@ -283,10 +329,7 @@ struct RootView: View {
         case .playlists:
             PlaylistView(model: model)
         case .workshop:
-            WorkshopView(model: model, workshop: workshop,
-                         openSteamSetup: { selection = .steamSetup },
-                         openLibrary: { selection = .all },
-                         openDownloads: { selection = .downloads })
+            EmptyView()
         case .downloads:
             DownloadsView(model: model, workshop: workshop,
                           openLibrary: { selection = .all },

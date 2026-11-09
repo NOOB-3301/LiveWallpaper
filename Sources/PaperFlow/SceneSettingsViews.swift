@@ -92,7 +92,7 @@ struct SceneSettingsCard: View {
     private func percent(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 
     var body: some View {
-        InspectorSection(title: "Scene", subtitle: "Tuning for this wallpaper only.") {
+        InspectorSection(title: "Scene settings", subtitle: "Tuning for this wallpaper only.") {
             VStack(alignment: .leading, spacing: 11) {
                 HStack {
                     Text("Frame rate"); Spacer()
