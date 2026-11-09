@@ -100,6 +100,15 @@ struct WorkshopSearchTests {
         #expect(filters.advancedCount == 4)
     }
 
+    @Test func genrePiecesAreFlagged() {
+        var filters = WorkshopFilters()
+        filters.kind = .scene
+        filters.toggle(genre: "Anime")
+        filters.toggle(feature: "HDR")
+        #expect(filters.pieces.map(\.isGenre) == [false, true, false])
+        #expect(filters.pieces.filter { !$0.isGenre }.map(\.label) == ["Scene", "HDR"])
+    }
+
     @Test func queryKeyChangesWithTheQueryOnly() {
         var filters = WorkshopFilters()
         let base = filters.queryKey

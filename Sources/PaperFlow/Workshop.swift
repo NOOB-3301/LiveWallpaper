@@ -301,6 +301,9 @@ enum WorkshopListState: Equatable {
     @Published private(set) var loadMoreError: WorkshopError?
     /// How many items Steam says match, when it said.
     @Published private(set) var totalResults: Int?
+    /// An item another part of the window (the link lookup popover) wants opened in the detail pane. The Workshop
+    /// view takes it and clears it.
+    @Published var detailRequest: WorkshopItem?
     @Published private(set) var savedSearches: [WorkshopSavedSearch] =
         WorkshopStore.load([WorkshopSavedSearch].self, key: WorkshopStore.savedKey) ?? []
     @Published private(set) var recentSearches: [String] =

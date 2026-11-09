@@ -2,9 +2,10 @@ import SwiftUI
 import AppKit
 import Core
 
-// Views for the Workshop and Steam Setup tabs, built on the WorkshopModel surface in Workshop.swift. Result cards
-// open the detail pane (WorkshopDetailView.swift); downloads live in their own page (DownloadsView.swift). Steam
-// Setup is the in-app wizard (SteamWizardView.swift) plus an Advanced section.
+// Views for the Workshop and Steam Setup tabs, built on the WorkshopModel surface in Workshop.swift. The filter bar
+// is pinned above the grid (WorkshopFilterViews.swift); search and the link lookup live in the window toolbar
+// (App.swift). Result cards open the detail pane (WorkshopDetailView.swift); downloads live in their own page
+// (DownloadsView.swift). Steam Setup is the in-app wizard (SteamWizardView.swift) plus an Advanced section.
 //
 // Layout stability rule: the browse task hangs off WorkshopView's root, whose identity never changes when the
 // window is resized or the detail pane opens. Only a real change of the search inputs (sort, text, filters)
@@ -271,37 +272,6 @@ struct WorkshopCardActions: View {
 // MARK: - Item cards: layouts
 
 @MainActor
-private struct ResultCard<Actions: View>: View {
-    let item: WorkshopItem
-    let actions: Actions
-
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 18) {
-            PreviewImage(url: item.previewURL).frame(width: 232, height: 131)
-                .shadow(color: .black.opacity(hovering ? 0.22 : 0.08), radius: hovering ? 16 : 10, y: 7)
-            VStack(alignment: .leading, spacing: 8) {
-                Text(item.title).font(.title3.weight(.semibold)).lineLimit(2)
-                ChipRow(item: item)
-                Text(cardInfoLine(item)).font(.caption).foregroundStyle(.secondary)
-                if !item.summary.isEmpty {
-                    Text(item.summary).font(.callout).foregroundStyle(.secondary).lineLimit(3)
-                }
-                Spacer(minLength: 2)
-                actions.frame(maxWidth: .infinity, alignment: .trailing)
-            }
-        }
-        .padding(18)
-        .background { glassShape(radius: LWTheme.cardRadius) }
-        .scaleEffect(hovering ? 1.005 : 1)
-        .animation(LWMotion.hover, value: hovering)
-        .onHover { hovering = $0 }
-        .contentShape(Rectangle())
-    }
-}
-
-@MainActor
 private struct CompactCard<Actions: View>: View {
     let item: WorkshopItem
     let actions: Actions
@@ -349,29 +319,28 @@ private struct CompactCard<Actions: View>: View {
 
 // MARK: - Workshop tab
 
-/// Workshop tab: paste field + result card, topic/tag browse grid (needs an API key), setup banner,
-/// and a live strip for running downloads.
+/// Workshop tab: the pinned filter bar over a grid of results (needs an API key), the setup banner, and the detail
+/// pane. The link lookup is a popover from the toolbar (WorkshopLinkPopover).
 @MainActor
 struct WorkshopView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var workshop: WorkshopModel
     let openSteamSetup: () -> Void
     let openLibrary: () -> Void
-    let openDownloads: () -> Void
     @State private var browsed = false
     @State private var detail: WorkshopItem?   // the result whose detail pane is open
-    @State private var showFilters = false
 
     // RootView (another file) builds this view; spelling the init out keeps the private @State from affecting it.
     init(model: SettingsModel, workshop: WorkshopModel,
-         openSteamSetup: @escaping () -> Void, openLibrary: @escaping () -> Void,
-         openDownloads: @escaping () -> Void) {
+         openSteamSetup: @escaping () -> Void, openLibrary: @escaping () -> Void) {
         self._model = ObservedObject(wrappedValue: model)
         self._workshop = ObservedObject(wrappedValue: workshop)
         self.openSteamSetup = openSteamSetup
         self.openLibrary = openLibrary
-        self.openDownloads = openDownloads
     }
+
+    /// The detail pane has the Library inspector's width, so the two pages feel alike.
+    private static let detailWidth: CGFloat = 330
 
     // Wide windows show the detail pane next to the results; narrow ones cover the results with it.
     // The browse task is attached here — the root — so no amount of resizing or detail opening restarts it.
@@ -382,6 +351,11 @@ struct WorkshopView: View {
         .animation(LWMotion.content, value: detail?.id)
         .onAppear { workshop.recheckSetup() }
         .task(id: workshop.searchKey) { await refreshBrowse() }
+        .onChange(of: workshop.detailRequest) { _, item in
+            guard let item else { return }
+            detail = item
+            workshop.detailRequest = nil
+        }
     }
 
     /// The results column keeps one place in the view tree whether or not the detail pane is open: moving it
@@ -398,7 +372,7 @@ struct WorkshopView: View {
                 .accessibilityHidden(covered)
             if wide, let item = detail {
                 Divider()
-                detailPane(item, wide: true).frame(width: 380).zIndex(1)
+                detailPane(item, wide: true).frame(width: Self.detailWidth).zIndex(1)
             }
         }
         .overlay {
@@ -417,50 +391,25 @@ struct WorkshopView: View {
             .id(item.id)
     }
 
-    /// Anchored, so the grid keeps showing the same wallpapers, and the one whose details are open, when the detail
-    /// pane narrows or widens it.
+    /// The bar stays put; only the grid scrolls. Anchored, so the grid keeps showing the same wallpapers, and the one
+    /// whose details are open, when the detail pane narrows or widens it.
     private var resultsColumn: some View {
-        AnchoredScrollView(order: workshop.results.map(\.id), keepingVisible: detail?.id) {
-            VStack(alignment: .leading, spacing: LWTheme.sectionSpacing) {
-                LWPageHeader(
-                    title: "Workshop",
-                    subtitle: "Video and scene wallpapers from Steam, downloaded with your own account.",
-                    trailing: { downloadsStrip })
-
-                if !workshop.setup.canDownload { setupBanner }
-                pasteRow
-                lookupSection
-                if workshop.canBrowse { browseSection } else { keyHint }
+        VStack(spacing: 0) {
+            if workshop.canBrowse {
+                WorkshopFilterBar(workshop: workshop)
+                Divider()
             }
-            .padding(LWTheme.contentPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollIndicators(.visible)
-    }
-
-    /// Live "N downloads in progress" strip in the header; jumps to the Downloads page.
-    @ViewBuilder private var downloadsStrip: some View {
-        if workshop.hasActiveDownloads {
-            Button(action: openDownloads) {
-                HStack(spacing: 8) {
-                    ProgressRing(progress: workshop.overallDownloadProgress ?? 0,
-                                 size: 22, lineWidth: 2.5)
-                        .opacity(workshop.overallDownloadProgress == nil ? 0.35 : 1)
-                    Text("\(workshop.activeDownloadCount) downloading")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
+            AnchoredScrollView(order: workshop.results.map(\.id), keepingVisible: detail?.id) {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !workshop.setup.canDownload { setupBanner }
+                    if workshop.canBrowse { browseResults } else { noKeyState }
                 }
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background {
-                    Capsule()
-                        .fill(.regularMaterial)
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
-                }
+                .padding(.horizontal, LWTheme.contentPadding)
+                .padding(.top, 16)
+                .padding(.bottom, LWTheme.contentPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
-            .help("Open Downloads")
-            .accessibilityLabel("Open Downloads")
+            .scrollIndicators(.visible)
         }
     }
 
@@ -480,84 +429,17 @@ struct WorkshopView: View {
         }
     }
 
-    private var pasteRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "link")
-                    .foregroundStyle(.secondary)
-                TextField("Paste a Workshop link or item number", text: $workshop.pastedText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 16, weight: .medium))
-                    .onSubmit { workshop.lookUp() }
-                if !workshop.pastedText.isEmpty {
-                    Button { workshop.pastedText = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("Clear")
-                }
-                Button { paste() } label: {
-                    Image(systemName: "doc.on.clipboard")
-                }
-                .buttonStyle(.borderless)
-                .help("Paste from the clipboard")
-                .accessibilityLabel("Paste from the clipboard")
-                Button("Look Up") { workshop.lookUp() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(workshop.pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(14)
-            .background { glassShape(radius: 15) }
-            Text("Paste a link from the Steam Workshop and it looks up automatically.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .padding(.leading, 4)
-        }
-        .task(id: workshop.pastedText) { await lookUpPastedText() }
-    }
-
-    private func paste() {
-        if let text = NSPasteboard.general.string(forType: .string) { workshop.pastedText = text }
-    }
-
-    /// Looks a plausible link or number up once typing or pasting has paused.
-    private func lookUpPastedText() async {
-        let text = workshop.pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard looksLikeWorkshopItem(text) else { return }
-        if case .found(let item) = workshop.lookup, text.contains(item.id) { return }
-        try? await Task.sleep(nanoseconds: 600_000_000)
-        if !Task.isCancelled { workshop.lookUp() }
-    }
-
-    @ViewBuilder private var lookupSection: some View {
-        switch workshop.lookup {
-        case .idle:
-            if !workshop.canBrowse { emptyState }
-        case .loading:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Looking up…").foregroundStyle(.secondary)
-            }
-        case .found(let item):
-            ResultCard(item: item, actions: actions(for: item, compact: false))
-                .contentShape(Rectangle())
-                .onTapGesture { detail = item }
-        case .failed(let error):
-            WorkshopFailureView(error: error, workshop: workshop, retry: { workshop.lookUp() }, openSteamSetup: openSteamSetup)
-                .lwGlassCard()
-        }
-    }
-
-    private var emptyState: some View {
+    /// Without an API key there is nothing to browse; the link lookup in the toolbar still works.
+    private var noKeyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "arrow.down.circle")
                 .font(.system(size: 38, weight: .light))
                 .foregroundStyle(.tertiary)
             Text("Download wallpapers from Steam").font(.title3.weight(.semibold))
-            Text("Paste a Workshop link or item number above. Video and scene wallpapers can play.")
+            Text("Browsing needs a free Steam Web API key. Add one in Steam Setup, or look up a Workshop link with the link button in the toolbar (⌘L). Video and scene wallpapers can play.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+            Button("Open Steam Setup", action: openSteamSetup).buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 42)
@@ -588,80 +470,6 @@ struct WorkshopView: View {
         }
         try? await Task.sleep(nanoseconds: 400_000_000)
         if !Task.isCancelled { workshop.search(keepingResults: true) }
-    }
-
-    private var keyHint: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "info.circle")
-            Text("Browsing needs a free Steam Web API key. Add one in Steam Setup, or paste a link above.")
-            Spacer(minLength: 6)
-            Button("Steam Setup", action: openSteamSetup).buttonStyle(.link)
-        }
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(14)
-        .background { glassShape(radius: 12) }
-    }
-
-    private var browseSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Browse").font(.title3.weight(.semibold))
-                Text(countText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            WorkshopGenreRow(workshop: workshop)
-            browseControls
-            WorkshopActiveFilters(workshop: workshop)
-            WorkshopSavedRow(workshop: workshop)
-            browseResults
-        }
-    }
-
-    /// "12,431 wallpapers" when Steam said how many match, else what is loaded so far.
-    private var countText: String {
-        let count = workshop.totalResults ?? workshop.results.count
-        return "\(count.formatted()) \(count == 1 ? "wallpaper" : "wallpapers")"
-    }
-
-    private var browseControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                LWSearchField(prompt: "Search wallpapers", text: $workshop.searchText)
-
-                Button { showFilters.toggle() } label: {
-                    let count = workshop.filters.advancedCount
-                    Label(count > 0 ? "Filters · \(count)" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
-                        .font(.callout.weight(.medium))
-                }
-                .buttonStyle(.bordered)
-                .popover(isPresented: $showFilters, arrowEdge: .bottom) { WorkshopFilterPopover(workshop: workshop) }
-                .help("Rating, resolution, features and more")
-
-                Button { workshop.saveCurrentSearch() } label: {
-                    Image(systemName: workshop.isCurrentSearchSaved ? "bookmark.fill" : "bookmark")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!workshop.canSaveSearch)
-                .help(workshop.isCurrentSearchSaved ? "This search is saved" : "Save this search")
-                .accessibilityLabel("Save this search")
-            }
-
-            HStack(spacing: 10) {
-                WorkshopSortMenu(workshop: workshop)
-                Spacer(minLength: 8)
-                HStack(spacing: 2) {
-                    ForEach(WorkshopKindFilter.allCases) { kind in
-                        LWTopicChip(title: kind.label,
-                                    selected: workshop.filters.kind == kind) {
-                            withAnimation(LWMotion.hover) { workshop.filters.kind = kind }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     @ViewBuilder private var browseResults: some View {
@@ -756,6 +564,121 @@ struct WorkshopView: View {
                 .background { glassShape(radius: LWTheme.cardRadius) }
             }
         }
+    }
+}
+
+// MARK: - Link lookup
+
+/// Paste a Workshop link or item number and get the item back: the toolbar's link button (⌘L) opens this. It looks
+/// up by itself once pasting has paused, and offers the same download actions as a grid card.
+@MainActor
+struct WorkshopLinkPopover: View {
+    @ObservedObject var workshop: WorkshopModel
+    @ObservedObject var model: SettingsModel
+    let openSteamSetup: () -> Void
+    let openLibrary: () -> Void
+    let openDetail: (WorkshopItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Look up a Workshop item").font(.headline)
+            field
+            result
+        }
+        .padding(16)
+        .frame(width: 430)
+        .task(id: workshop.pastedText) { await lookUpPastedText() }
+        .onAppear(perform: prefillFromClipboard)
+    }
+
+    private var field: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "link").foregroundStyle(.secondary)
+            TextField("Paste a Workshop link or item number", text: $workshop.pastedText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14, weight: .medium))
+                .onSubmit { workshop.lookUp() }
+            if !workshop.pastedText.isEmpty {
+                Button { workshop.pastedText = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Clear")
+            }
+            Button { paste() } label: { Image(systemName: "doc.on.clipboard") }
+                .buttonStyle(.borderless)
+                .help("Paste from the clipboard")
+                .accessibilityLabel("Paste from the clipboard")
+            Button("Look Up") { workshop.lookUp() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(workshop.pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(10)
+        .background { glassShape(radius: 11) }
+    }
+
+    @ViewBuilder private var result: some View {
+        switch workshop.lookup {
+        case .idle:
+            Text("Paste a link from the Steam Workshop and it looks up automatically.")
+                .font(.caption).foregroundStyle(.tertiary)
+        case .loading:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Looking up…").foregroundStyle(.secondary)
+            }
+        case .found(let item):
+            foundRow(item)
+        case .failed(let error):
+            WorkshopFailureView(error: error, workshop: workshop, retry: { workshop.lookUp() },
+                                openSteamSetup: openSteamSetup)
+        }
+    }
+
+    private func foundRow(_ item: WorkshopItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            PreviewImage(url: item.previewURL).frame(width: 128)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.title).font(.callout.weight(.semibold)).lineLimit(2)
+                ChipRow(item: item)
+                Text(cardInfoLine(item)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                WorkshopCardActions(
+                    item: item,
+                    action: WorkshopCardAction.make(item: item, state: workshop.downloads[item.id],
+                                                    inLibrary: workshop.isInLibrary(item.id)),
+                    ready: workshop.setup.canDownload, compact: true, workshop: workshop,
+                    openSteamSetup: openSteamSetup, showInLibrary: { showInLibrary(item) })
+                Button("Details…") { openDetail(item) }.buttonStyle(.link).font(.caption)
+            }
+        }
+        .padding(10)
+        .background { glassShape(radius: 12) }
+    }
+
+    private func showInLibrary(_ item: WorkshopItem) {
+        if let video = model.videos.first(where: { $0.workshopID == item.id }) { model.focusedID = video.id }
+        openLibrary()
+    }
+
+    private func paste() {
+        if let text = NSPasteboard.general.string(forType: .string) { workshop.pastedText = text }
+    }
+
+    /// A Workshop link already on the clipboard is the usual reason to open this, so it is filled in.
+    private func prefillFromClipboard() {
+        guard workshop.pastedText.isEmpty,
+              let text = NSPasteboard.general.string(forType: .string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              looksLikeWorkshopItem(text) else { return }
+        workshop.pastedText = text
+    }
+
+    /// Looks a plausible link or number up once typing or pasting has paused.
+    private func lookUpPastedText() async {
+        let text = workshop.pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard looksLikeWorkshopItem(text) else { return }
+        if case .found(let item) = workshop.lookup, text.contains(item.id) { return }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        if !Task.isCancelled { workshop.lookUp() }
     }
 }
 

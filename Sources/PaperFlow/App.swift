@@ -134,6 +134,7 @@ struct RootView: View {
     /// Set the first time the Workshop is opened. From then on its view stays in the tree (hidden while another page
     /// shows), so coming back finds the scroll position, open detail pane and half-typed search where they were.
     @State private var workshopVisited = false
+    @State private var showLinkLookup = false
 
     var body: some View {
         NavigationSplitView {
@@ -239,6 +240,26 @@ struct RootView: View {
                     .keyboardShortcut("i", modifiers: [.command, .option])
                 }
             }
+            // The Workshop's own controls live here, not in WorkshopView: that view stays alive (hidden) once opened,
+            // and a hidden view would keep contributing toolbar items to every other page.
+            if selection == .workshop {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showLinkLookup.toggle() } label: { Image(systemName: "link") }
+                        .help("Look up a Workshop link or item number (⌘L)")
+                        .accessibilityLabel("Look up a Workshop link")
+                        .keyboardShortcut("l", modifiers: .command)
+                        .popover(isPresented: $showLinkLookup, arrowEdge: .bottom) {
+                            WorkshopLinkPopover(
+                                workshop: workshop, model: model,
+                                openSteamSetup: { showLinkLookup = false; selection = .steamSetup },
+                                openLibrary: { showLinkLookup = false; selection = .all },
+                                openDetail: { item in showLinkLookup = false; workshop.detailRequest = item })
+                        }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    WorkshopToolbarSearch(text: $workshop.searchText)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 if workshop.hasActiveDownloads {
                     Button {
@@ -278,8 +299,7 @@ struct RootView: View {
             if workshopVisited || onWorkshop {
                 WorkshopView(model: model, workshop: workshop,
                              openSteamSetup: { selection = .steamSetup },
-                             openLibrary: { selection = .all },
-                             openDownloads: { selection = .downloads })
+                             openLibrary: { selection = .all })
                     .opacity(onWorkshop ? 1 : 0)
                     .allowsHitTesting(onWorkshop)
                     .accessibilityHidden(!onWorkshop)

@@ -235,6 +235,11 @@ struct WorkshopFilters: Equatable, Codable {
         let kind: Kind
         let label: String
         var id: String { label }
+        /// Genres have chips of their own, so the applied-filter bar leaves them out.
+        var isGenre: Bool {
+            if case .genre = kind { return true }
+            return false
+        }
     }
 
     var pieces: [Piece] {
