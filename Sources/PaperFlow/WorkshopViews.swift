@@ -7,7 +7,7 @@ import Core
 // Setup is the in-app wizard (SteamWizardView.swift) plus an Advanced section.
 //
 // Layout stability rule: the browse task hangs off WorkshopView's root, whose identity never changes when the
-// window is resized or the detail pane opens. Only a real change of the search inputs (sort, text, mature, kind)
+// window is resized or the detail pane opens. Only a real change of the search inputs (sort, text, filters)
 // restarts it, and a restart keeps the previous results on screen while the new page loads.
 
 // MARK: - Shared pieces
@@ -305,6 +305,8 @@ private struct ResultCard<Actions: View>: View {
 private struct CompactCard<Actions: View>: View {
     let item: WorkshopItem
     let actions: Actions
+    var dimmed = false                         // already in the library
+    var onTag: ((String) -> Void)? = nil       // a tag chip was clicked
 
     private var info: String {
         var parts: [String] = []
@@ -323,7 +325,13 @@ private struct CompactCard<Actions: View>: View {
             Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true)
             HStack(spacing: 5) {
                 ForEach(topicTags(of: item, limit: 2), id: \.self) { tag in
-                    LWChip(text: tag)
+                    if let onTag {
+                        Button { onTag(tag) } label: { LWChip(text: tag) }
+                            .buttonStyle(.plain)
+                            .help("Show only “\(tag)”")
+                    } else {
+                        LWChip(text: tag)
+                    }
                 }
             }
             .frame(height: 16, alignment: .top)
@@ -332,6 +340,8 @@ private struct CompactCard<Actions: View>: View {
         }
         .padding(14)
         .background { glassShape(radius: LWTheme.cardRadius) }
+        .opacity(dimmed && !hovering ? 0.55 : 1)
+        .animation(LWMotion.hover, value: hovering)
         .onHover { hovering = $0 }
         .contentShape(Rectangle())
     }
@@ -350,6 +360,7 @@ struct WorkshopView: View {
     let openDownloads: () -> Void
     @State private var browsed = false
     @State private var detail: WorkshopItem?   // the result whose detail pane is open
+    @State private var showFilters = false
 
     // RootView (another file) builds this view; spelling the init out keeps the private @State from affecting it.
     init(model: SettingsModel, workshop: WorkshopModel,
@@ -387,17 +398,22 @@ struct WorkshopView: View {
                 .accessibilityHidden(covered)
             if wide, let item = detail {
                 Divider()
-                detailPane(item).frame(width: 380).zIndex(1)
+                detailPane(item, wide: true).frame(width: 380).zIndex(1)
             }
         }
         .overlay {
-            if !wide, let item = detail { detailPane(item) }
+            if !wide, let item = detail { detailPane(item, wide: false) }
         }
     }
 
-    private func detailPane(_ item: WorkshopItem) -> some View {
+    private func detailPane(_ item: WorkshopItem, wide: Bool) -> some View {
         WorkshopDetailView(model: model, workshop: workshop, item: item, close: { detail = nil },
-                           openSteamSetup: openSteamSetup, openLibrary: openLibrary)
+                           openSteamSetup: openSteamSetup, openLibrary: openLibrary,
+                           narrowTo: { tag in
+                               workshop.narrow(toTag: tag)
+                               if !wide { detail = nil }    // a narrow window shows the results again
+                           },
+                           open: { detail = $0 })
             .id(item.id)
     }
 
@@ -591,78 +607,66 @@ struct WorkshopView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Browse").font(.title3.weight(.semibold))
-                Text("\(workshop.results.count)")
+                Text(countText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer()
             }
-            topicRow
+            WorkshopGenreRow(workshop: workshop)
             browseControls
+            WorkshopActiveFilters(workshop: workshop)
+            WorkshopSavedRow(workshop: workshop)
             browseResults
         }
     }
 
-    /// Curated topics. A topic is the ranked text search on its name; "All" clears the text search.
-    private var topicRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                LWTopicChip(title: "All",
-                            selected: workshop.searchText.isEmpty) {
-                    workshop.searchText = ""
-                }
-                ForEach(WorkshopTopic.allCases) { topic in
-                    LWTopicChip(title: topic.rawValue,
-                                selected: workshop.searchText.caseInsensitiveCompare(topic.rawValue) == .orderedSame) {
-                        toggleTopic(topic)
-                    }
-                }
-            }
-            .padding(.vertical, 2)
-        }
-    }
-
-    private func toggleTopic(_ topic: WorkshopTopic) {
-        if workshop.searchText.caseInsensitiveCompare(topic.rawValue) == .orderedSame {
-            workshop.searchText = ""
-        } else {
-            workshop.searchText = topic.rawValue
-        }
+    /// "12,431 wallpapers" when Steam said how many match, else what is loaded so far.
+    private var countText: String {
+        let count = workshop.totalResults ?? workshop.results.count
+        return "\(count.formatted()) \(count == 1 ? "wallpaper" : "wallpapers")"
     }
 
     private var browseControls: some View {
-        HStack(spacing: 10) {
-            Menu {
-                ForEach(WorkshopSort.allCases) { sort in
-                    Button(sort.label) { workshop.sort = sort }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                LWSearchField(prompt: "Search wallpapers", text: $workshop.searchText)
+
+                Button { showFilters.toggle() } label: {
+                    let count = workshop.filters.advancedCount
+                    Label(count > 0 ? "Filters · \(count)" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        .font(.callout.weight(.medium))
                 }
-            } label: {
-                Label(workshop.sort.label, systemImage: "arrow.up.arrow.down")
-                    .font(.callout.weight(.medium))
+                .buttonStyle(.bordered)
+                .popover(isPresented: $showFilters, arrowEdge: .bottom) { WorkshopFilterPopover(workshop: workshop) }
+                .help("Rating, resolution, features and more")
+
+                Button { workshop.saveCurrentSearch() } label: {
+                    Image(systemName: workshop.isCurrentSearchSaved ? "bookmark.fill" : "bookmark")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!workshop.canSaveSearch)
+                .help(workshop.isCurrentSearchSaved ? "This search is saved" : "Save this search")
+                .accessibilityLabel("Save this search")
             }
-            .fixedSize()
-            .disabled(!workshop.searchText.isEmpty)
-            .help(workshop.searchText.isEmpty
-                  ? "Order of the browse grid"
-                  : "Steam decides the order while a search is active")
 
-            LWSearchField(prompt: "Search wallpapers", text: $workshop.searchText)
-
-            HStack(spacing: 2) {
-                ForEach(WorkshopKindFilter.allCases) { kind in
-                    LWTopicChip(title: kind.label,
-                                selected: workshop.kindFilter == kind) {
-                        withAnimation(LWMotion.hover) { workshop.kindFilter = kind }
+            HStack(spacing: 10) {
+                WorkshopSortMenu(workshop: workshop)
+                Spacer(minLength: 8)
+                HStack(spacing: 2) {
+                    ForEach(WorkshopKindFilter.allCases) { kind in
+                        LWTopicChip(title: kind.label,
+                                    selected: workshop.filters.kind == kind) {
+                            withAnimation(LWMotion.hover) { workshop.filters.kind = kind }
+                        }
                     }
                 }
             }
-
-            Toggle("Mature", isOn: $workshop.includeMature)
-                .toggleStyle(.checkbox)
-                .help("Include questionable and mature items")
         }
     }
 
     @ViewBuilder private var browseResults: some View {
+        // A following page loading leaves the grid alone; only a new search replaces (and dims) it.
+        let refreshing = workshop.listState == .loading && !workshop.loadingMore
         if case .failed(let error) = workshop.listState, workshop.results.isEmpty {
             WorkshopFailureView(error: error, workshop: workshop, retry: { workshop.search() }, openSteamSetup: openSteamSetup)
         }
@@ -677,12 +681,19 @@ struct WorkshopView: View {
             .frame(maxWidth: .infinity)
         }
         if workshop.listState == .loaded, workshop.results.isEmpty {
-            Text("No wallpapers match. Try another topic or search.").font(.callout).foregroundStyle(.secondary)
+            VStack(spacing: 8) {
+                Text("No wallpapers match.").font(.callout).foregroundStyle(.secondary)
+                if workshop.isSearching || !workshop.filters.isDefault {
+                    Button("Clear search and filters") { workshop.resetSearch() }.buttonStyle(.bordered)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
         }
         if !workshop.results.isEmpty {
             resultGrid
-                .opacity(workshop.listState == .loading ? 0.55 : 1)
-                .animation(LWMotion.content, value: workshop.listState == .loading)
+                .opacity(refreshing ? 0.55 : 1)
+                .animation(LWMotion.content, value: refreshing)
         }
         if workshop.listState == .loading {
             if workshop.results.isEmpty {
@@ -690,11 +701,22 @@ struct WorkshopView: View {
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Refreshing…").font(.caption).foregroundStyle(.secondary)
+                    Text(workshop.loadingMore ? "Loading more…" : "Refreshing…")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             }
+        } else if let error = workshop.loadMoreError {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange)
+                Text("Couldn’t load more — \(error.title).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Retry") { workshop.loadMore(retry: true) }
+                    .buttonStyle(.link).font(.caption)
+            }
+            .frame(maxWidth: .infinity)
         } else if workshop.canLoadMore {
+            // Scrolling near the end loads the next page by itself; the button is the fallback.
             Button {
                 workshop.loadMore()
             } label: {
@@ -709,11 +731,14 @@ struct WorkshopView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: LWTheme.gridSpacing)],
                   alignment: .leading, spacing: LWTheme.gridSpacing) {
             ForEach(workshop.results) { item in
-                CompactCard(item: item, actions: actions(for: item, compact: true))
+                CompactCard(item: item, actions: actions(for: item, compact: true),
+                            dimmed: workshop.isInLibrary(item.id),
+                            onTag: { workshop.narrow(toTag: $0) })
                     .contentShape(Rectangle())
                     .onTapGesture { detail = item }
                     .scrollAnchorItem(item.id)
                     .lwScrollEntry()
+                    .onAppear { workshop.loadMoreIfNeeded(after: item.id) }
             }
         }
     }

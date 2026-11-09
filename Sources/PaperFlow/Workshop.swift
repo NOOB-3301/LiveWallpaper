@@ -12,8 +12,8 @@ import AVFoundation
 // Legitimacy rules (non-negotiable): the only download path is Valve's steamcmd with the user's own Steam
 // account, signed in through the wizard (SteamTools.swift). Downloads themselves never see a password or Steam
 // Guard code: steamcmd runs with stdin closed and +@NoPromptForPassword 1. The only network calls are the Steam
-// Web API endpoints named in SPEC2.md 4.1 plus the item's own preview image; no HTML scraping; no third-party
-// downloader sites. The Web API key is sent only to api.steampowered.com and is never logged or cached.
+// Web API endpoints named in SPEC2.md 4.1, IPublishedFileService/GetUserFiles (the "more from this creator" strip,
+// same key, same host) and the item's own preview image; no HTML scraping; no third-party downloader sites. The Web API key is sent only to api.steampowered.com and is never logged or cached.
 
 // MARK: - Value types
 
@@ -186,61 +186,6 @@ struct SteamSetupStatus: Equatable {
     }
 }
 
-enum WorkshopSort: String, CaseIterable, Identifiable {
-    case trending, newest, popular
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .trending: return "Trending"
-        case .newest: return "Newest"
-        case .popular: return "Most Subscribed"
-        }
-    }
-}
-
-/// Curated browse topics. A topic is just Steam's ranked text search on the topic name, so it rides the
-/// existing search path (no extra endpoint, no API change). Chips are text-only on purpose.
-enum WorkshopTopic: String, CaseIterable, Identifiable {
-    case anime = "Anime"
-    case nature = "Nature"
-    case cyberpunk = "Cyberpunk"
-    case space = "Space"
-    case abstract = "Abstract"
-    case game = "Game"
-    case music = "Music"
-    case aesthetic = "Aesthetic"
-    case fantasy = "Fantasy"
-    case landscape = "Landscape"
-    case city = "City"
-    case animal = "Animal"
-
-    var id: String { rawValue }
-}
-
-/// What the browse grid offers: everything, or one kind of wallpaper.
-enum WorkshopKindFilter: String, CaseIterable, Identifiable {
-    case all, video, scene
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .all: return "All"
-        case .video: return "Videos"
-        case .scene: return "Scenes"
-        }
-    }
-
-    /// Steam's own tag for this kind, when the list should be narrowed.
-    var requiredTag: String? {
-        switch self {
-        case .all: return nil
-        case .video: return "Video"
-        case .scene: return "Scene"
-        }
-    }
-}
-
 /// One row of the Downloads section: the item and where its download stands.
 struct WorkshopDownloadEntry: Identifiable, Equatable {
     let item: WorkshopItem
@@ -334,14 +279,53 @@ enum WorkshopListState: Equatable {
     @Published var pastedText: String = ""
     @Published private(set) var lookup: WorkshopLookupState = .idle
 
-    // Browse and search (needs apiKey).
-    @Published var searchText: String = ""
-    @Published var sort: WorkshopSort = .trending
-    @Published var kindFilter: WorkshopKindFilter = .all
-    @Published var includeMature: Bool = false            // false = hide Questionable and Mature
+    // Browse and search (needs apiKey). Sort, trend period and filters are remembered between launches.
+    // While the search box has text the order is `searchSort` (relevance unless the user picked another);
+    // with it empty the order is `browseSort`, so clearing a search brings the previous order back.
+    @Published var searchText: String = "" {
+        didSet {
+            // A new search starts at relevance, like Steam's own search box.
+            if oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, isSearching { searchSort = .relevance }
+        }
+    }
+    @Published var browseSort: WorkshopSort = WorkshopModel.savedPrefs.sort { didSet { persistBrowsePrefs() } }
+    @Published var searchSort: WorkshopSort = .relevance
+    @Published var trendPeriod: WorkshopTrendPeriod = WorkshopModel.savedPrefs.period { didSet { persistBrowsePrefs() } }
+    @Published var filters: WorkshopFilters = WorkshopModel.savedPrefs.filters { didSet { persistBrowsePrefs() } }
     @Published private(set) var results: [WorkshopItem] = []
     @Published private(set) var listState: WorkshopListState = .idle
     @Published private(set) var canLoadMore: Bool = false
+    /// True while a following page loads (the grid stays as it is), false while a new search replaces it.
+    @Published private(set) var loadingMore: Bool = false
+    /// Why the following page failed; nil otherwise. Paging stops by itself while this is set.
+    @Published private(set) var loadMoreError: WorkshopError?
+    /// How many items Steam says match, when it said.
+    @Published private(set) var totalResults: Int?
+    @Published private(set) var savedSearches: [WorkshopSavedSearch] =
+        WorkshopStore.load([WorkshopSavedSearch].self, key: WorkshopStore.savedKey) ?? []
+    @Published private(set) var recentSearches: [String] =
+        WorkshopStore.load([String].self, key: WorkshopStore.recentKey) ?? []
+
+    private static let savedPrefs = WorkshopStore.load(WorkshopBrowsePrefs.self, key: WorkshopStore.browseKey)
+        ?? WorkshopBrowsePrefs()
+
+    var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// The order in force right now: the search order while searching, else the browse order.
+    var activeSort: WorkshopSort {
+        get { isSearching ? searchSort : browseSort }
+        set {
+            if isSearching { searchSort = newValue } else { browseSort = newValue == .relevance ? .trending : newValue }
+        }
+    }
+
+    private func persistBrowsePrefs() {
+        var prefs = WorkshopBrowsePrefs()
+        prefs.sort = browseSort
+        prefs.period = trendPeriod
+        prefs.filters = filters
+        WorkshopStore.save(prefs, key: WorkshopStore.browseKey)
+    }
 
     /// Every item the app has shown or queued, by id. The Downloads section renders from this even after the
     /// results grid has moved on to another search.
@@ -392,7 +376,10 @@ enum WorkshopListState: Equatable {
 
     /// The search inputs as one value, so a view can restart a browse task exactly when one of them changes
     /// (including the arrival of the API key, which switches browsing on).
-    var searchKey: String { "\(sort.rawValue)|\(searchText)|\(includeMature)|\(kindFilter.rawValue)|\(canBrowse)" }
+    var searchKey: String {
+        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(activeSort.rawValue)|\(trendPeriod.rawValue)|\(text)|\(filters.queryKey)|\(canBrowse)"
+    }
 
     /// True while any download is queued, signing in, downloading or importing. The Settings app stays alive
     /// with its window closed until this is false again.
@@ -542,46 +529,146 @@ enum WorkshopListState: Equatable {
         }
     }
 
-    /// Resets `results` and loads the first page for the current sort/searchText/includeMature.
+    /// Resets `results` and loads the first page for the current sort, text and filters.
     /// `keepingResults` leaves the previous page up (dimmed) while the new one loads, so refining a search
     /// never flashes an empty grid.
     func search(keepingResults keep: Bool = false) {
         searchTask?.cancel()
         searchGeneration += 1
         nextCursor = "*"
-        if !keep { results = [] }
+        if !keep { results = []; totalResults = nil }
         canLoadMore = false
+        loadingMore = false
+        loadMoreError = nil
         if canBrowse { loadPage(replacing: true) } else { listState = .idle }
     }
 
-    func loadMore() {
-        guard canBrowse, canLoadMore, listState != .loading else { return }
+    /// The next page. `retry` is the user pressing the button after a failure; automatic paging stays off then.
+    func loadMore(retry: Bool = false) {
+        guard canBrowse, canLoadMore, listState != .loading, retry || loadMoreError == nil else { return }
+        loadMoreError = nil
         loadPage(replacing: false)
+    }
+
+    /// Called as a card scrolls into view: near the end of the list, fetch the next page before the user hits the bottom.
+    func loadMoreIfNeeded(after id: String) {
+        guard results.suffix(6).contains(where: { $0.id == id }) else { return }
+        loadMore()
+    }
+
+    private var currentQuery: WorkshopQuery {
+        WorkshopQuery(text: searchText, sort: activeSort, period: trendPeriod, filters: filters,
+                      cursor: nextCursor ?? "*", pageSize: WorkshopKit.API.pageSize)
     }
 
     private func loadPage(replacing: Bool) {
         listState = .loading
+        loadingMore = !replacing
         let generation = searchGeneration
-        let request = WorkshopKit.API.Browse(key: trimmedKey, sort: sort, text: searchText,
-                                             mature: includeMature, requiredTag: kindFilter.requiredTag,
-                                             cursor: nextCursor ?? "*")
+        let query = currentQuery
+        let key = trimmedKey
         searchTask = Task { @MainActor [weak self] in
             do {
-                let page = try await WorkshopKit.API.browse(request)
+                let page = try await WorkshopKit.API.browse(query, key: key)
                 guard let self, generation == self.searchGeneration, !Task.isCancelled else { return }
                 self.register(page.items)
                 let known = Set(replacing ? [] : self.results.map(\.id))
                 let fresh = page.items.filter { !known.contains($0.id) }
                 self.results = replacing ? fresh : self.results + fresh
                 self.nextCursor = page.next
-                self.canLoadMore = page.next != nil && page.next != request.cursor
+                self.canLoadMore = page.next != nil && page.next != query.cursor
                     && page.rawCount == WorkshopKit.API.pageSize
+                self.totalResults = page.total ?? self.totalResults
                 self.listState = .loaded
+                self.loadingMore = false
+                if replacing { self.remember(search: query.trimmedText) }
             } catch {
                 guard let self, generation == self.searchGeneration, !Task.isCancelled else { return }
-                self.listState = .failed(error as? WorkshopError ?? .network("unexpected error"))
+                let failure = error as? WorkshopError ?? .network("unexpected error")
+                self.loadingMore = false
+                if replacing {
+                    self.listState = .failed(failure)
+                } else {
+                    // The grid already on screen is fine; only the next page is missing.
+                    self.loadMoreError = failure
+                    self.listState = .loaded
+                }
             }
         }
+    }
+
+    // MARK: Saved and recent searches, tag clicks
+
+    private func remember(search text: String) {
+        let updated = WorkshopRecents.remembering(text, in: recentSearches)
+        guard updated != recentSearches else { return }
+        recentSearches = updated
+        WorkshopStore.save(updated, key: WorkshopStore.recentKey)
+    }
+
+    func clearRecentSearches() {
+        recentSearches = []
+        WorkshopStore.save(recentSearches, key: WorkshopStore.recentKey)
+    }
+
+    /// Something worth saving: text, narrowed filters or a non-default order.
+    var canSaveSearch: Bool {
+        (isSearching || !filters.isDefault || browseSort != .trending) && !isCurrentSearchSaved
+    }
+
+    var isCurrentSearchSaved: Bool {
+        savedSearches.contains { $0.matches(text: searchText, sort: activeSort, period: trendPeriod, filters: filters) }
+    }
+
+    func saveCurrentSearch() {
+        guard canSaveSearch else { return }
+        savedSearches.append(WorkshopSavedSearch(text: searchText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                 sort: activeSort, period: trendPeriod, filters: filters))
+        WorkshopStore.save(savedSearches, key: WorkshopStore.savedKey)
+    }
+
+    func removeSavedSearch(_ id: UUID) {
+        savedSearches.removeAll { $0.id == id }
+        WorkshopStore.save(savedSearches, key: WorkshopStore.savedKey)
+    }
+
+    func apply(_ saved: WorkshopSavedSearch) {
+        filters = saved.filters
+        trendPeriod = saved.period
+        let text = saved.text
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            searchText = ""
+            browseSort = saved.sort == .relevance ? .trending : saved.sort
+        } else {
+            searchText = text
+            searchSort = saved.sort      // after the text, which resets it to relevance
+        }
+    }
+
+    /// Back to the plain browse: no text, no filters. The order the user picked stays.
+    func resetSearch() {
+        searchText = ""
+        filters = WorkshopFilters()
+    }
+
+    /// A tag was clicked: filter by it when Steam can, else search for it.
+    func narrow(toTag tag: String) {
+        var next = filters
+        if next.apply(tag: tag) {
+            filters = next
+        } else {
+            searchText = tag
+        }
+    }
+
+    /// More wallpapers by the same creator (needs the API key and the creator's Steam ID). Empty on any failure:
+    /// the strip is a bonus and never shows an error.
+    func moreFromCreator(of item: WorkshopItem) async -> [WorkshopItem] {
+        guard canBrowse, let creator = item.creatorSteamID, WorkshopKit.Link.isSteamID(creator) else { return [] }
+        guard let page = try? await WorkshopKit.API.userFiles(steamID: creator, key: trimmedKey) else { return [] }
+        let others = page.items.filter { $0.id != item.id }
+        register(others)
+        return Array(others.prefix(12))
     }
 
     /// Remembers items so the Downloads section can render them later.
@@ -817,6 +904,11 @@ extension WorkshopKit {
             return id
         }
 
+        /// A 64-bit Steam ID: 17 digits.
+        static func isSteamID(_ text: String) -> Bool {
+            text.count == 17 && text.allSatisfy(isDigit)
+        }
+
         static func isItemNumber(_ text: String) -> Bool {
             (6...20).contains(text.count) && text.allSatisfy(isDigit)
         }
@@ -931,13 +1023,15 @@ extension WorkshopKit {
         struct Response: Decodable {
             let files: [File]
             let nextCursor: String?
+            let total: Int?
 
-            private enum Keys: String, CodingKey { case files = "publishedfiledetails", nextCursor = "next_cursor" }
+            private enum Keys: String, CodingKey { case files = "publishedfiledetails", nextCursor = "next_cursor", total }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: Keys.self)
                 files = ((try? c.decodeIfPresent([Lossy<File>].self, forKey: .files)) ?? []).compactMap { $0.value }
                 nextCursor = try? c.decodeIfPresent(String.self, forKey: .nextCursor)
+                total = (try? c.decodeIfPresent(StringOrInt.self, forKey: .total))?.number.map { Int($0) }
             }
         }
 
@@ -981,19 +1075,11 @@ extension WorkshopKit {
             return URLSession(configuration: configuration)
         }()
 
-        struct Browse {
-            let key: String
-            let sort: WorkshopSort
-            let text: String
-            let mature: Bool
-            var requiredTag: String? = nil   // Steam tag the item must carry ("Video", "Scene")
-            let cursor: String
-        }
-
         struct Page {
             let items: [WorkshopItem]
             let next: String?
             let rawCount: Int
+            var total: Int? = nil
         }
 
         /// E1: public, no key. POST form body built by hand.
@@ -1013,33 +1099,30 @@ extension WorkshopKit {
         }
 
         /// E2: needs the user's own Web API key.
-        static func browse(_ browse: Browse) async throws -> Page {
-            let response = try await send(URLRequest(url: queryURL(browse)), keyed: true)
+        static func browse(_ browse: WorkshopQuery, key: String) async throws -> Page {
+            let response = try await send(URLRequest(url: queryURL(browse, key: key)), keyed: true)
             return Page(items: response.files.compactMap { try? $0.workshopItem() },
-                        next: response.nextCursor, rawCount: response.files.count)
+                        next: response.nextCursor, rawCount: response.files.count, total: response.total)
         }
 
-        static func queryURL(_ browse: Browse) -> URL {
-            let text = browse.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            var pairs: [(String, String)] = [("key", browse.key), ("appid", appID), ("creator_appid", appID)]
-            if !text.isEmpty {
-                pairs += [("query_type", "12"), ("search_text", text)]   // RankedByTextSearch
-            } else {
-                switch browse.sort {
-                case .trending: pairs += [("query_type", "3"), ("days", "7")]   // RankedByTrend
-                case .newest: pairs.append(("query_type", "1"))                 // RankedByPublicationDate
-                case .popular: pairs.append(("query_type", "9"))                // RankedByTotalUniqueSubscriptions
-                }
-            }
-            // No required tag by default: Steam's required tags must all match, so "Video" alone hid every scene.
-            // The kind filter sets exactly one ("Video" or "Scene") when the user narrows the grid. Items the app
-            // cannot import (web, application) still show, with an "unsupported" chip and no download.
-            pairs += [("cursor", browse.cursor), ("numperpage", String(pageSize))]
-            if let requiredTag = browse.requiredTag { pairs += [("requiredtags[0]", requiredTag)] }
-            if !browse.mature { pairs += [("excludedtags[0]", "Questionable"), ("excludedtags[1]", "Mature")] }
-            pairs += [("return_tags", "true"), ("return_short_description", "true"), ("return_previews", "false"),
-                      ("return_vote_data", "false"), ("return_metadata", "false")]
-            return URL(string: base + "/IPublishedFileService/QueryFiles/v1/?" + query(pairs))!
+        /// What to ask Steam is decided in `WorkshopQuery` (WorkshopSearch.swift, with tests). No required tag by
+        /// default: Steam's required tags must all match, so "Video" alone hid every scene. Items the app cannot
+        /// import (web, application) still show, with an "unsupported" note and no download, unless "Playable only" is on.
+        static func queryURL(_ browse: WorkshopQuery, key: String) -> URL {
+            URL(string: base + "/IPublishedFileService/QueryFiles/v1/?" + query([("key", key)] + browse.pairs(appID: appID)))!
+        }
+
+        /// E3: one creator's public Wallpaper Engine items, newest page first. Needs the API key.
+        static func userFiles(steamID: String, key: String) async throws -> Page {
+            let pairs: [(String, String)] = [
+                ("key", key), ("steamid", steamID), ("appid", appID), ("page", "1"), ("numperpage", "13"),
+                ("return_tags", "true"), ("return_short_description", "true"), ("return_previews", "false"),
+                ("return_vote_data", "false"), ("return_metadata", "false"),
+            ]
+            let url = URL(string: base + "/IPublishedFileService/GetUserFiles/v1/?" + query(pairs))!
+            let response = try await send(URLRequest(url: url), keyed: true)
+            return Page(items: response.files.compactMap { try? $0.workshopItem() },
+                        next: nil, rawCount: response.files.count, total: response.total)
         }
 
         /// `URLSession.data(for:)`. The Linux test toolchain (swift-corelibs-foundation 5.10) has no async URLSession API.

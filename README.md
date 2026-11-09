@@ -44,7 +44,7 @@ The following Activity Monitor snapshots show the memory footprint of the wallpa
 | | |
 |---|---|
 | ![Steam Workshop grid showing trending video and scene wallpapers with download buttons](assets/screenshots/workshop-browse.png) | ![Steam Workshop link lookup showing a scene wallpaper's tags, resolution, size and download button](assets/screenshots/workshop-lookup.png) |
-| **Workshop browser.** Trending, search and a Mature filter. Web wallpapers are flagged as unsupported instead of failing after download. | **Paste a link.** Any Workshop URL or item number is looked up automatically and shows type, resolution, rating and size before you download. |
+| **Workshop browser.** Trending, most subscribed and more, search that keeps your sort, Steam's genre tags, resolution and age-rating filters, saved searches. Web wallpapers are flagged as unsupported instead of failing after download. | **Paste a link.** Any Workshop URL or item number is looked up automatically and shows type, resolution, rating and size before you download. |
 | ![Steam Setup wizard: install SteamCMD, sign in to Steam, check Wallpaper Engine](assets/screenshots/steam-setup.png) | ![Empty wallpaper library with Choose Videos and Browse the Workshop buttons](assets/screenshots/library-empty.png) |
 | **Steam Setup.** Three steps: install SteamCMD (about 3 MB), sign in, check Wallpaper Engine. | **Library.** Drop videos anywhere on the window. Sidebar filters: All, Desktop, Lock Screen, Scenes. |
 

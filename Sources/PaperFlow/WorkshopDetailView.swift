@@ -93,16 +93,22 @@ struct WorkshopDetailView: View {
     let close: () -> Void
     let openSteamSetup: () -> Void
     let openLibrary: () -> Void
+    let narrowTo: (String) -> Void          // a tag was clicked: filter the results by it
+    let open: (WorkshopItem) -> Void        // another item of the same creator was clicked
     @StateObject private var preview = WorkshopPreviewLoader()
+    @State private var creatorItems: [WorkshopItem] = []
 
     init(model: SettingsModel, workshop: WorkshopModel, item: WorkshopItem, close: @escaping () -> Void,
-         openSteamSetup: @escaping () -> Void, openLibrary: @escaping () -> Void) {
+         openSteamSetup: @escaping () -> Void, openLibrary: @escaping () -> Void,
+         narrowTo: @escaping (String) -> Void, open: @escaping (WorkshopItem) -> Void) {
         self._model = ObservedObject(wrappedValue: model)
         self._workshop = ObservedObject(wrappedValue: workshop)
         self.item = item
         self.close = close
         self.openSteamSetup = openSteamSetup
         self.openLibrary = openLibrary
+        self.narrowTo = narrowTo
+        self.open = open
     }
 
     private var libraryItem: VideoItem? { model.videos.first { $0.workshopID == item.id } }
@@ -142,12 +148,14 @@ struct WorkshopDetailView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 actions
+                creatorStrip
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: item.id) { await preview.load(item.previewURL) }
+        .task(id: item.id) { creatorItems = await workshop.moreFromCreator(of: item) }
     }
 
     // MARK: Preview
@@ -195,10 +203,14 @@ struct WorkshopDetailView: View {
     private var chips: some View {
         WrappingRows {
             if item.kind != .unknown {
-                WorkshopChip(text: item.kind.rawValue.capitalized, tint: item.isImportable ? Color.accentColor : Color.orange)
+                if item.isImportable {
+                    tagChip(item.kind.rawValue.capitalized, tint: Color.accentColor)
+                } else {
+                    WorkshopChip(text: item.kind.rawValue.capitalized, tint: Color.orange)
+                }
             }
-            if let resolution = item.resolutionTag { WorkshopChip(text: resolution) }
-            if let rating = item.ratingTag { WorkshopChip(text: rating) }
+            if let resolution = item.resolutionTag { tagChip(resolution) }
+            if let rating = item.ratingTag { tagChip(rating) }
             if item.sizeBytes > 0 {
                 WorkshopChip(text: ByteCountFormatter.string(fromByteCount: item.sizeBytes, countStyle: .file))
             }
@@ -215,8 +227,50 @@ struct WorkshopDetailView: View {
     @ViewBuilder private var tags: some View {
         if !otherTags.isEmpty {
             WrappingRows {
-                ForEach(otherTags, id: \.self) { WorkshopChip(text: $0) }
+                ForEach(otherTags, id: \.self) { tagChip($0) }
             }
+        }
+    }
+
+    /// A tag that filters the results when clicked.
+    private func tagChip(_ text: String, tint: Color? = nil) -> some View {
+        Button { narrowTo(text) } label: { WorkshopChip(text: text, tint: tint) }
+            .buttonStyle(.plain)
+            .help("Show only “\(text)”")
+    }
+
+    // MARK: More from the creator
+
+    @ViewBuilder private var creatorStrip: some View {
+        if !creatorItems.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("More from this creator").font(.subheadline.weight(.semibold))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(creatorItems) { other in
+                            Button { open(other) } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    AsyncImage(url: other.previewURL) { phase in
+                                        if let image = phase.image {
+                                            image.resizable().scaledToFill()
+                                        } else {
+                                            Color.primary.opacity(0.06)
+                                        }
+                                    }
+                                    .frame(width: 140, height: 79)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    Text(other.title).font(.caption).lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(width: 140, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .help(other.title)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
         }
     }
 

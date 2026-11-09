@@ -131,6 +131,9 @@ struct RootView: View {
     @ObservedObject var workshop: WorkshopModel
     @State private var selection: SidebarSelection = .all
     @State private var showInspector = true
+    /// Set the first time the Workshop is opened. From then on its view stays in the tree (hidden while another page
+    /// shows), so coming back finds the scroll position, open detail pane and half-typed search where they were.
+    @State private var workshopVisited = false
 
     var body: some View {
         NavigationSplitView {
@@ -141,6 +144,7 @@ struct RootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
+        .onChange(of: selection) { _, new in if new == .workshop { workshopVisited = true } }
     }
 
     // MARK: Sidebar
@@ -266,7 +270,26 @@ struct RootView: View {
         }
     }
 
+    /// The Workshop view is the one page that is never torn down once it has been opened: rebuilding it would start a
+    /// new scroll view at the top. The other pages are rebuilt on every visit, as before.
     @ViewBuilder private var content: some View {
+        let onWorkshop = selection == .workshop
+        ZStack {
+            if workshopVisited || onWorkshop {
+                WorkshopView(model: model, workshop: workshop,
+                             openSteamSetup: { selection = .steamSetup },
+                             openLibrary: { selection = .all },
+                             openDownloads: { selection = .downloads })
+                    .opacity(onWorkshop ? 1 : 0)
+                    .allowsHitTesting(onWorkshop)
+                    .accessibilityHidden(!onWorkshop)
+                    .disabled(!onWorkshop)   // a hidden page must not keep the keyboard focus or its shortcuts
+            }
+            if !onWorkshop { otherPage }
+        }
+    }
+
+    @ViewBuilder private var otherPage: some View {
         switch selection {
         case .all, .desktop, .lockScreen, .scenes:
             LibraryView(model: model,
@@ -283,10 +306,7 @@ struct RootView: View {
         case .playlists:
             PlaylistView(model: model)
         case .workshop:
-            WorkshopView(model: model, workshop: workshop,
-                         openSteamSetup: { selection = .steamSetup },
-                         openLibrary: { selection = .all },
-                         openDownloads: { selection = .downloads })
+            EmptyView()
         case .downloads:
             DownloadsView(model: model, workshop: workshop,
                           openLibrary: { selection = .all },
