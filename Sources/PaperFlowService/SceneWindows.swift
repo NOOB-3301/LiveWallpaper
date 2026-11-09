@@ -43,6 +43,12 @@ struct SceneDisplay {
 @MainActor final class SceneWindowManager {
     private var windows: [(window: NSWindow, view: MetalView)] = []
     private var observers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
+    private var covered = false
+    private var sleeping = false
+    /// Nothing of the scene can be seen: other windows cover every screen, or the displays sleep.
+    private(set) var hidden = false
+    /// Called on the main actor when `hidden` changes.
+    var onHiddenChange: (() -> Void)?
 
     /// Creates the windows if needed and returns the layer of every screen.
     func displays() -> [SceneDisplay] {
@@ -74,6 +80,9 @@ struct SceneDisplay {
         windows.removeAll()
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
+        covered = false
+        sleeping = false
+        hidden = false
     }
 
     /// The screen's number, which is stable while the display is connected.
@@ -105,11 +114,34 @@ struct SceneDisplay {
     }
 
     private func installObservers() {
-        let center = NotificationCenter.default
-        let token = center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
-                                        object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.rebuildWindows() }
+        guard observers.isEmpty else { return }  // rebuilds keep the observers they already have
+        let workspace = NSWorkspace.shared.notificationCenter
+        listen(NSApplication.didChangeScreenParametersNotification) { $0.rebuildWindows() }
+        listen(NSWindow.didChangeOcclusionStateNotification) { $0.updateHidden() }
+        for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
+            listen(name, on: workspace) { $0.sleeping = true; $0.updateHidden() }
+        }
+        for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.didWakeNotification] {
+            listen(name, on: workspace) { $0.sleeping = false; $0.updateHidden() }
+        }
+    }
+
+    private func listen(_ name: Notification.Name, on center: NotificationCenter = .default,
+                        _ handler: @escaping @MainActor @Sendable (SceneWindowManager) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                if let self { handler(self) }
+            }
         }
         observers.append((center, token))
+    }
+
+    /// A covered desktop draws nothing, the same rule video wallpapers follow.
+    private func updateHidden() {
+        covered = !windows.isEmpty && windows.allSatisfy { !$0.window.occlusionState.contains(.visible) }
+        let now = sleeping || covered
+        guard now != hidden else { return }
+        hidden = now
+        onHiddenChange?()
     }
 }
